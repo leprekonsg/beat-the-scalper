@@ -1,0 +1,258 @@
+{
+  "runs": [
+    {
+      "label": "run-1",
+      "kind": "measured",
+      "passed": true,
+      "failures": [],
+      "finalState": "COMPLETED",
+      "ordersCount": 1,
+      "ticks": 2,
+      "wallMs": 1085,
+      "latency": {
+        "signalReceivedAt": "2026-09-18T12:35:45.244Z",
+        "observationStartAt": "2026-09-18T12:35:45.252Z",
+        "observationEndAt": "2026-09-18T12:35:45.320Z",
+        "candidateAt": "2026-09-18T12:35:45.320Z",
+        "validationDoneAt": "2026-09-18T12:35:45.322Z",
+        "checkoutReadyAt": "2026-09-18T12:35:45.457Z",
+        "handoffAt": null,
+        "submissionAt": "2026-09-18T12:35:45.457Z",
+        "orderObservedAt": "2026-09-18T12:35:45.518Z"
+      },
+      "signalToReadyMs": 274,
+      "observationToReadyMs": 266,
+      "provenanceLabelsSeen": [
+        "demo",
+        "manual_input"
+      ],
+      "executorCounts": {
+        "readCart": 1,
+        "addOneToCart": 1,
+        "reviewCheckout": 1,
+        "submitDemoOrder": 1,
+        "findOrderForSession": 0
+      },
+      "passedThroughUnknown": false
+    },
+    {
+      "label": "run-2",
+      "kind": "measured",
+      "passed": true,
+      "failures": [],
+      "finalState": "COMPLETED",
+      "ordersCount": 1,
+      "ticks": 2,
+      "wallMs": 348,
+      "latency": {
+        "signalReceivedAt": "2026-09-18T12:35:45.615Z",
+        "observationStartAt": "2026-09-18T12:35:45.617Z",
+        "observationEndAt": "2026-09-18T12:35:45.682Z",
+        "candidateAt": "2026-09-18T12:35:45.682Z",
+        "validationDoneAt": "2026-09-18T12:35:45.682Z",
+        "checkoutReadyAt": "2026-09-18T12:35:45.793Z",
+        "handoffAt": null,
+        "submissionAt": "2026-09-18T12:35:45.794Z",
+        "orderObservedAt": "2026-09-18T12:35:45.868Z"
+      },
+      "signalToReadyMs": 253,
+      "observationToReadyMs": 251,
+      "provenanceLabelsSeen": [
+        "demo",
+        "manual_input"
+      ],
+      "executorCounts": {
+        "readCart": 1,
+        "addOneToCart": 1,
+        "reviewCheckout": 1,
+        "submitDemoOrder": 1,
+        "findOrderForSession": 0
+      },
+      "passedThroughUnknown": false
+    },
+    {
+      "label": "run-3",
+      "kind": "measured",
+      "passed": true,
+      "failures": [],
+      "finalState": "COMPLETED",
+      "ordersCount": 1,
+      "ticks": 2,
+      "wallMs": 332,
+      "latency": {
+        "signalReceivedAt": "2026-09-18T12:35:45.949Z",
+        "observationStartAt": "2026-09-18T12:35:45.953Z",
+        "observationEndAt": "2026-09-18T12:35:46.014Z",
+        "candidateAt": "2026-09-18T12:35:46.014Z",
+        "validationDoneAt": "2026-09-18T12:35:46.014Z",
+        "checkoutReadyAt": "2026-09-18T12:35:46.132Z",
+        "handoffAt": null,
+        "submissionAt": "2026-09-18T12:35:46.132Z",
+        "orderObservedAt": "2026-09-18T12:35:46.200Z"
+      },
+      "signalToReadyMs": 251,
+      "observationToReadyMs": 247,
+      "provenanceLabelsSeen": [
+        "demo",
+        "manual_input"
+      ],
+      "executorCounts": {
+        "readCart": 1,
+        "addOneToCart": 1,
+        "reviewCheckout": 1,
+        "submitDemoOrder": 1,
+        "findOrderForSession": 0
+      },
+      "passedThroughUnknown": false
+    },
+    {
+      "label": "run-4",
+      "kind": "measured",
+      "passed": true,
+      "failures": [],
+      "finalState": "COMPLETED",
+      "ordersCount": 1,
+      "ticks": 2,
+      "wallMs": 333,
+      "latency": {
+        "signalReceivedAt": "2026-09-18T12:35:46.283Z",
+        "observationStartAt": "2026-09-18T12:35:46.286Z",
+        "observationEndAt": "2026-09-18T12:35:46.348Z",
+        "candidateAt": "2026-09-18T12:35:46.348Z",
+        "validationDoneAt": "2026-09-18T12:35:46.348Z",
+        "checkoutReadyAt": "2026-09-18T12:35:46.464Z",
+        "handoffAt": null,
+        "submissionAt": "2026-09-18T12:35:46.465Z",
+        "orderObservedAt": "2026-09-18T12:35:46.534Z"
+      },
+      "signalToReadyMs": 251,
+      "observationToReadyMs": 248,
+      "provenanceLabelsSeen": [
+        "demo",
+        "manual_input"
+      ],
+      "executorCounts": {
+        "readCart": 1,
+        "addOneToCart": 1,
+        "reviewCheckout": 1,
+        "submitDemoOrder": 1,
+        "findOrderForSession": 0
+      },
+      "passedThroughUnknown": false
+    },
+    {
+      "label": "run-5",
+      "kind": "measured",
+      "passed": true,
+      "failures": [],
+      "finalState": "COMPLETED",
+      "ordersCount": 1,
+      "ticks": 2,
+      "wallMs": 337,
+      "latency": {
+        "signalReceivedAt": "2026-09-18T12:35:46.616Z",
+        "observationStartAt": "2026-09-18T12:35:46.620Z",
+        "observationEndAt": "2026-09-18T12:35:46.685Z",
+        "candidateAt": "2026-09-18T12:35:46.685Z",
+        "validationDoneAt": "2026-09-18T12:35:46.685Z",
+        "checkoutReadyAt": "2026-09-18T12:35:46.802Z",
+        "handoffAt": null,
+        "submissionAt": "2026-09-18T12:35:46.803Z",
+        "orderObservedAt": "2026-09-18T12:35:46.870Z"
+      },
+      "signalToReadyMs": 254,
+      "observationToReadyMs": 250,
+      "provenanceLabelsSeen": [
+        "demo",
+        "manual_input"
+      ],
+      "executorCounts": {
+        "readCart": 1,
+        "addOneToCart": 1,
+        "reviewCheckout": 1,
+        "submitDemoOrder": 1,
+        "findOrderForSession": 0
+      },
+      "passedThroughUnknown": false
+    }
+  ],
+  "faultCases": [
+    {
+      "label": "fault-add-to-cart-once",
+      "kind": "fault_add_to_cart_once",
+      "passed": true,
+      "failures": [],
+      "finalState": "COMPLETED",
+      "ordersCount": 1,
+      "ticks": 2,
+      "wallMs": 351,
+      "latency": {
+        "signalReceivedAt": "2026-09-18T12:35:46.948Z",
+        "observationStartAt": "2026-09-18T12:35:46.952Z",
+        "observationEndAt": "2026-09-18T12:35:47.022Z",
+        "candidateAt": "2026-09-18T12:35:47.022Z",
+        "validationDoneAt": "2026-09-18T12:35:47.023Z",
+        "checkoutReadyAt": "2026-09-18T12:35:47.146Z",
+        "handoffAt": null,
+        "submissionAt": "2026-09-18T12:35:47.146Z",
+        "orderObservedAt": "2026-09-18T12:35:47.221Z"
+      },
+      "signalToReadyMs": 273,
+      "observationToReadyMs": 269,
+      "provenanceLabelsSeen": [
+        "demo",
+        "manual_input"
+      ],
+      "executorCounts": {
+        "readCart": 1,
+        "addOneToCart": 1,
+        "reviewCheckout": 1,
+        "submitDemoOrder": 1,
+        "findOrderForSession": 0
+      },
+      "passedThroughUnknown": false
+    },
+    {
+      "label": "fault-delayed-confirmation",
+      "kind": "fault_delayed_confirmation",
+      "passed": true,
+      "failures": [],
+      "finalState": "COMPLETED",
+      "ordersCount": 1,
+      "ticks": 3,
+      "wallMs": 8455,
+      "latency": {
+        "signalReceivedAt": "2026-09-18T12:35:47.315Z",
+        "observationStartAt": "2026-09-18T12:35:47.319Z",
+        "observationEndAt": "2026-09-18T12:35:47.381Z",
+        "candidateAt": "2026-09-18T12:35:47.381Z",
+        "validationDoneAt": "2026-09-18T12:35:47.382Z",
+        "checkoutReadyAt": "2026-09-18T12:35:47.511Z",
+        "handoffAt": null,
+        "submissionAt": "2026-09-18T12:35:47.512Z",
+        "orderObservedAt": "2026-09-18T12:35:55.676Z"
+      },
+      "signalToReadyMs": 8361,
+      "observationToReadyMs": 8357,
+      "provenanceLabelsSeen": [
+        "demo",
+        "manual_input"
+      ],
+      "executorCounts": {
+        "readCart": 1,
+        "addOneToCart": 1,
+        "reviewCheckout": 1,
+        "submitDemoOrder": 1,
+        "findOrderForSession": 1
+      },
+      "passedThroughUnknown": true
+    }
+  ],
+  "environment": {
+    "node": "v22.17.1",
+    "playwright": "1.63.0",
+    "modelPath": "not used",
+    "timestampUtc": "2026-09-18T12:35:56.454Z",
+    "timestampSingapore": "2026-09-18 20:35 +08:00"
+  }
+}

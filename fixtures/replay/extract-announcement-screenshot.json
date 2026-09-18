@@ -1,0 +1,91 @@
+{
+  "label": "Offline replay fixture - not a live Fable run",
+  "output": {
+    "productFormat": {
+      "value": null,
+      "evidenceId": null,
+      "span": null,
+      "reason": "Product format text is not legible at the alert thumbnail's resolution."
+    },
+    "productName": {
+      "value": null,
+      "evidenceId": null,
+      "span": null,
+      "reason": "Product name text is not legible at the alert thumbnail's resolution."
+    },
+    "language": {
+      "value": null,
+      "evidenceId": null,
+      "span": null,
+      "reason": "Not stated in the visible alert text."
+    },
+    "market": {
+      "value": null,
+      "evidenceId": null,
+      "span": null,
+      "reason": "Not stated; the app locale is not visible in the screenshot."
+    },
+    "releaseDateLocal": {
+      "value": null,
+      "evidenceId": null,
+      "span": null,
+      "reason": "Capture date/time unknown; the relative alert age cannot be anchored to an absolute instant. Upload time and the phone's visible status-bar clock are not trustworthy anchors."
+    },
+    "releaseTimeLocal": {
+      "value": null,
+      "evidenceId": null,
+      "span": null,
+      "reason": "No absolute restock time is visible; only a relative alert age and an ambiguous phone clock are shown."
+    },
+    "timezone": {
+      "value": null,
+      "evidenceId": null,
+      "span": null,
+      "reason": "Not stated in the screenshot."
+    },
+    "sellerOrChannel": {
+      "value": null,
+      "evidenceId": null,
+      "span": null,
+      "reason": "Seller/channel text is not legible at the alert thumbnail's resolution."
+    },
+    "purchaseLimit": {
+      "value": null,
+      "evidenceId": null,
+      "span": null,
+      "reason": "Not stated in the alert."
+    },
+    "statedConditions": [
+      {
+        "value": "Outer plastic wrapping will be removed",
+        "evidenceId": "evd_reference_restock_alerts",
+        "span": "40,120,360,260",
+        "reason": null
+      }
+    ],
+    "packagingCondition": {
+      "value": "stated_removed",
+      "evidenceId": "evd_reference_restock_alerts",
+      "span": "40,120,360,260",
+      "reason": null
+    },
+    "relativeAge": {
+      "value": "42 minutes ago",
+      "evidenceId": "evd_reference_restock_alerts",
+      "span": "Both restock alert entries are timestamped \"42 minutes ago\"",
+      "reason": "Capture date/time unknown; the alert's relative age cannot be resolved into an absolute instant. The phone's visible 1:47 clock is not a trustworthy capture-time anchor, and the actual notification-delivery delay is unknown."
+    },
+    "dateBasis": "unknown",
+    "missingFactsForActionableIntent": [
+      "exact product URL",
+      "retailer product identifier as exposed by the page",
+      "selected variant identifier",
+      "seller identity mapped from the first-party Pokemon SG link",
+      "maximum delivered price in SGD",
+      "accepted watch expiry",
+      "trustworthy capture date/time of the alert screenshot",
+      "legible product format, product name, and seller text"
+    ],
+    "notes": "Synthetic fixture for offline replay of the user-supplied reference restock-alert screenshot (fixtures/reference-restock-alerts.png); not extracted from a live Fable call."
+  }
+}

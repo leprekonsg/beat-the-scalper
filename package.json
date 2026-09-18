@@ -1,0 +1,48 @@
+{
+  "name": "beat-the-scalper",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "BTS - Beat The Scalper. Local-first single-item purchase assistant with demo storefront and gated Lazada assist mode.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server/index.ts",
+    "server": "tsx src/server/index.ts",
+    "demo:store": "tsx demo/store/server.ts",
+    "ui": "vite --config src/ui/vite.config.ts",
+    "ui:build": "vite build --config src/ui/vite.config.ts",
+    "start": "concurrently -k -n store,api,ui \"npm:demo:store\" \"npm:server\" \"npm:ui\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "smoke:fable": "tsx scripts/smoke-fable.ts",
+    "eval:fable": "tsx scripts/eval-fable.ts",
+    "demo:run": "tsx scripts/run-demo-flows.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.125.0",
+    "@fontsource-variable/source-code-pro": "5.3.0",
+    "@fontsource-variable/source-sans-3": "5.3.0",
+    "@fontsource/marcellus": "5.3.0",
+    "playwright": "1.63.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zod": "4.6.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "22.20.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "concurrently": "10.0.5",
+    "tsx": "4.23.13",
+    "typescript": "5.9.3",
+    "vite": "8.3.0",
+    "vitest": "5.0.0"
+  }
+}

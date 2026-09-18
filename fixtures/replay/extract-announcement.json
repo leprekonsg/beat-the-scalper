@@ -1,0 +1,82 @@
+{
+  "label": "Offline replay fixture - not a live Fable run",
+  "output": {
+    "productFormat": {
+      "value": "Elite Trainer Box",
+      "evidenceId": "evd_synthetic_announcement_001",
+      "span": "\"Elite Trainer Box\" in the announcement heading",
+      "reason": null
+    },
+    "productName": {
+      "value": "Pokemon TCG: Scarlet & Violet-151 Elite Trainer Box",
+      "evidenceId": "evd_synthetic_announcement_001",
+      "span": "\"Pokemon TCG: Scarlet & Violet-151 Elite Trainer Box\" in the announcement title",
+      "reason": null
+    },
+    "language": {
+      "value": "English",
+      "evidenceId": "evd_synthetic_announcement_001",
+      "span": "Announcement body is written in English",
+      "reason": null
+    },
+    "market": {
+      "value": "Singapore",
+      "evidenceId": "evd_synthetic_announcement_001",
+      "span": "\"available exclusively on our Singapore Lazada store\"",
+      "reason": null
+    },
+    "releaseDateLocal": {
+      "value": "2026-09-25",
+      "evidenceId": "evd_synthetic_announcement_001",
+      "span": "\"launching 25 September 2026\"",
+      "reason": null
+    },
+    "releaseTimeLocal": {
+      "value": "10:00",
+      "evidenceId": "evd_synthetic_announcement_001",
+      "span": "\"live from 10:00am Singapore time\"",
+      "reason": null
+    },
+    "timezone": {
+      "value": "Asia/Singapore",
+      "evidenceId": "evd_synthetic_announcement_001",
+      "span": "\"Singapore time\"",
+      "reason": null
+    },
+    "sellerOrChannel": {
+      "value": "Pokemon Center Singapore official Lazada store",
+      "evidenceId": "evd_synthetic_announcement_001",
+      "span": "\"our official Lazada store\" in the announcement channel byline",
+      "reason": null
+    },
+    "purchaseLimit": {
+      "value": 1,
+      "evidenceId": "evd_synthetic_announcement_001",
+      "span": "\"limit one per customer\"",
+      "reason": null
+    },
+    "statedConditions": [],
+    "packagingCondition": {
+      "value": "not_stated",
+      "evidenceId": null,
+      "span": null,
+      "reason": "The announcement text does not mention packaging or outer wrapping; absence of a warning is not_stated, never stated_intact."
+    },
+    "relativeAge": {
+      "value": null,
+      "evidenceId": null,
+      "span": null,
+      "reason": "This is a dated announcement, not a relative-age notification; no relative-age phrase is present."
+    },
+    "dateBasis": "source_confirmed",
+    "missingFactsForActionableIntent": [
+      "exact product URL",
+      "retailer product identifier as exposed by the page",
+      "selected variant identifier",
+      "seller identity mapped from the first-party Pokemon SG link",
+      "maximum delivered price in SGD",
+      "accepted watch expiry"
+    ],
+    "notes": "Synthetic fixture for offline replay; not extracted from a live Fable call."
+  }
+}

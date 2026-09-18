@@ -1,0 +1,383 @@
+{
+  "schema_version": "1.0",
+  "project": "BTS — Beat The Scalper",
+  "authority": "BTS_FABLE_BUILD_PLAN.md, Section 14",
+  "purpose": "Descriptive acceptance checklist for the implementing coding agent. These are not implemented or executed tests.",
+  "cases": [
+    {
+      "id": "A01",
+      "scenario": "Source explicitly dates a Singapore 10:00 launch",
+      "expected_result": "Correct UTC instant, source link, and preflight schedule",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/unit/announcement.test.ts",
+          "tests/unit/scheduling.test.ts",
+          "tests/unit/time.test.ts",
+          "tests/unit/worker.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A02",
+      "scenario": "User says launches are usually at 10:00, with no date",
+      "expected_result": "Expected/draft only; no invented daily release",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/unit/announcement.test.ts",
+          "tests/unit/scheduling.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A03",
+      "scenario": "Initial drop sold out, later 13:27 restock",
+      "expected_result": "Same mission resumes, one candidate/attempt",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/integration/demoStore.http.test.ts",
+          "tests/unit/policy.test.ts",
+          "tests/unit/scheduling.test.ts",
+          "tests/unit/time.test.ts",
+          "tests/unit/worker.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A04",
+      "scenario": "Restock occurs outside 13:00–14:00",
+      "expected_result": "Baseline watch still detects when permitted",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/unit/scheduling.test.ts",
+          "tests/unit/time.test.ts",
+          "tests/unit/worker.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A05",
+      "scenario": "Mission begins while the target is already available",
+      "expected_result": "Fresh validation without requiring a prior sold-out sample",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/e2e/dashboard.spec.ts",
+          "tests/unit/announcement.test.ts",
+          "tests/unit/policy.test.ts",
+          "tests/unit/worker.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A06",
+      "scenario": "Screenshot says 42 minutes ago, capture date unknown",
+      "expected_result": "No invented absolute restock time or notification delay",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/e2e/dashboard.spec.ts",
+          "tests/unit/agent-client.test.ts",
+          "tests/unit/announcement.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)",
+        "model": "live claude-opus-5 and claude-fable-5-1 via scripts/eval-fable.ts (PASS, see docs/evaluation-results.md)"
+      }
+    },
+    {
+      "id": "A07",
+      "scenario": "Available wrong language/variant/seller",
+      "expected_result": "No eligible target result",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/unit/policy.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A08",
+      "scenario": "One bundle offered instead of the requested single pack",
+      "expected_result": "Format mismatch; quantity one does not override it",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/unit/policy.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A09",
+      "scenario": "Wrapping removal notice conflicts with policy",
+      "expected_result": "Crop/evidence shown; blocked or user review as specified",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/e2e/dashboard.spec.ts",
+          "tests/unit/policy.test.ts",
+          "tests/unit/worker.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)",
+        "model": "live claude-opus-5 and claude-fable-5-1 via scripts/eval-fable.ts (PASS, see docs/evaluation-results.md)"
+      }
+    },
+    {
+      "id": "A10",
+      "scenario": "Wrapping condition unknown under must-be-intact",
+      "expected_result": "Not eligible until evidence resolves it",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/e2e/dashboard.spec.ts",
+          "tests/unit/policy.test.ts",
+          "tests/unit/worker.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A11",
+      "scenario": "Item price under budget, delivery unknown/over budget",
+      "expected_result": "Unknown or ineligible, not checkout-authorised",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/e2e/dashboard.spec.ts",
+          "tests/integration/demoStore.http.test.ts",
+          "tests/unit/money.test.ts",
+          "tests/unit/policy.test.ts",
+          "tests/unit/worker.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A12",
+      "scenario": "Same alert delivered twice; duplicate scheduler tick",
+      "expected_result": "One active execution, no second cart increment",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/e2e/dashboard.spec.ts",
+          "tests/integration/demoStore.http.test.ts",
+          "tests/unit/storage.test.ts",
+          "tests/unit/worker.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A13",
+      "scenario": "Relevant page or intent changes after assessment",
+      "expected_result": "Old assessment/action rejected",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/unit/policy.test.ts",
+          "tests/unit/storage.test.ts",
+          "tests/unit/worker.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A14",
+      "scenario": "Target already in cart; unrelated items also present",
+      "expected_result": "No duplicate addition or silent deletion of other items",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/e2e/dashboard.spec.ts",
+          "tests/integration/demoStore.adapter.test.ts",
+          "tests/integration/demoStore.http.test.ts",
+          "tests/unit/policy.test.ts",
+          "tests/unit/worker.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A15",
+      "scenario": "Browser failure mid-action batch",
+      "expected_result": "Remaining actions halted; outcomes reobserved",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/integration/demoStore.adapter.test.ts",
+          "tests/integration/demoStore.http.test.ts",
+          "tests/unit/browserExecutor.test.ts",
+          "tests/unit/worker.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A16",
+      "scenario": "CAPTCHA, queue, rate limit, expired login",
+      "expected_result": "Pause/backoff as appropriate; no bypass",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/e2e/dashboard.spec.ts",
+          "tests/integration/demoStore.adapter.test.ts",
+          "tests/integration/demoStore.http.test.ts",
+          "tests/unit/config.test.ts",
+          "tests/unit/policy.test.ts",
+          "tests/unit/scheduling.test.ts",
+          "tests/unit/worker.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A17",
+      "scenario": "Page requests changing quantity, seller, budget, or permissions",
+      "expected_result": "Disallowed action rejected independently of model compliance",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/integration/demoStore.http.test.ts",
+          "tests/unit/browserExecutor.test.ts",
+          "tests/unit/worker.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A18",
+      "scenario": "Attempt to submit in live mode through click/key/script/navigation",
+      "expected_result": "Executor rejects or hands off before action",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/unit/browserExecutor.test.ts",
+          "tests/unit/worker.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A19",
+      "scenario": "Browser/process dies after submission may have occurred",
+      "expected_result": "Persistent UNKNOWN/reconciliation; no blind resubmission",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/e2e/dashboard.spec.ts",
+          "tests/integration/demoStore.adapter.test.ts",
+          "tests/integration/demoStore.http.test.ts",
+          "tests/unit/storage.test.ts",
+          "tests/unit/worker.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A20",
+      "scenario": "Demo confirmation is delayed, then an order is visible",
+      "expected_result": "One store order; observed order stops further purchase work",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/integration/demoStore.adapter.test.ts",
+          "tests/integration/demoStore.http.test.ts",
+          "tests/unit/worker.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A21",
+      "scenario": "Human handoff followed by app restart or expired worker lease",
+      "expected_result": "Handoff uncertainty remains locked",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/unit/storage.test.ts",
+          "tests/unit/worker.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A22",
+      "scenario": "Cancellation/expiry while model is working",
+      "expected_result": "Stale actions rejected; unresolved orders remain visible",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/e2e/dashboard.spec.ts",
+          "tests/unit/scheduling.test.ts",
+          "tests/unit/state.test.ts",
+          "tests/unit/storage.test.ts",
+          "tests/unit/worker.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A23",
+      "scenario": "Laptop sleeps and resumes",
+      "expected_result": "Degraded health, no catch-up storm, fresh eligible observation",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/unit/scheduling.test.ts",
+          "tests/unit/time.test.ts",
+          "tests/unit/worker.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A24",
+      "scenario": "API refusal, token truncation, missing key, or spend limit",
+      "expected_result": "Explicit blocked/replay state; no fabricated purchase",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/unit/agent-client.test.ts",
+          "tests/unit/config.test.ts",
+          "tests/unit/worker.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A25",
+      "scenario": "Earlier API assistant content is accidentally rewritten",
+      "expected_result": "Regression test detects changed prefix; no signed-history transplant",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/unit/agent-client.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    },
+    {
+      "id": "A26",
+      "scenario": "Demo-only submission requested against a real origin",
+      "expected_result": "Rejected regardless of model text or configuration UI",
+      "execution_status": "passed",
+      "evidence": {
+        "tests": [
+          "tests/integration/demoStore.adapter.test.ts",
+          "tests/unit/browserExecutor.test.ts",
+          "tests/unit/config.test.ts"
+        ],
+        "run": "npx vitest run (2026-09-18, all tests passed)"
+      }
+    }
+  ]
+}

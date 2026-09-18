@@ -1,0 +1,55 @@
+# Dependencies and build output
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Secrets and local runtime config
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.p12
+*.pfx
+id_rsa*
+
+# Local data, databases, browser state
+data/
+demo/data/
+*.sqlite
+*.sqlite-*
+*.db
+.browser-profiles/
+
+# Test, evidence, and capture artifacts
+coverage/
+playwright-report/
+test-results/
+blob-report/
+.playwright-mcp/
+evidence/
+captures/
+
+# Local build-process and design-process records (not published)
+.impeccable/
+START_HERE.md
+BTS_FABLE_BUILD_PLAN.md
+BUILD_STATUS.md
+docs/evaluation-results.jsonl
+
+# Logs
+*.log
+npm-debug.log*
+
+# Tooling and editor state
+.claude/settings.local.json
+.vscode/
+.idea/
+*.swp
+
+# OS and OneDrive cruft
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini

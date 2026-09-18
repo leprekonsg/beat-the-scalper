@@ -1,0 +1,19 @@
+{
+  "label": "Offline replay fixture - not a live Fable run",
+  "output": {
+    "finding": "The selected variant and seller match the approved intent. The product artwork states that outer plastic wrapping will be removed; this conflicts with a must_be_intact packaging policy and needs collector review before proceeding.",
+    "selectedVariantMatches": "yes",
+    "sellerMatches": "yes",
+    "productFormatMatches": "yes",
+    "packagingCondition": "stated_removed",
+    "packagingEvidenceRegion": "40,120,360,260",
+    "deliveredTotalMinor": null,
+    "missingFacts": [
+      "delivered total (shipping fee not yet shown on this screen)"
+    ],
+    "requestedAction": "user_review",
+    "evidenceIds": [
+      "evd_demo_offer_001"
+    ]
+  }
+}
