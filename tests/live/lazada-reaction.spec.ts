@@ -205,10 +205,17 @@ test('live Lazada single observation under the real Worker/scheduler (observe-on
   const schedulerSlackMs = Date.parse(started!.at) - Date.parse(scheduledAt);
   const observeMs = Date.parse(completed!.at) - Date.parse(started!.at);
   const interp = timingInterpreter.records.get(observationId) ?? null;
+  // readiness/readinessMs/buyBoxSelector/soldOutTextOutsideBuyBox: added when the fixed 4 s
+  // settle sleep was replaced by a bounded buy-box readiness wait (docs/lazada-feasibility.md, 2026-09-21
+  // note). Printed, not asserted on, until a live run confirms the buy-box selectors actually match.
+  const readiness = evidence?.observedFields.readiness ?? 'n/a';
+  const readinessMs = evidence?.observedFields.readinessMs ?? 'n/a';
+  const buyBoxSelector = evidence?.observedFields.buyBoxSelector ?? 'n/a';
+  const soldOutTextOutsideBuyBox = evidence?.observedFields.soldOutTextOutsideBuyBox ?? 'n/a';
 
   testInfo.annotations.push({
     type: 'timing',
-    description: `schedulerSlackMs=${schedulerSlackMs} observeMs=${observeMs} interpretationMs=${interp?.ms ?? 'n/a'} availability=${obs.availability} accessControl=${obs.accessControl}`,
+    description: `schedulerSlackMs=${schedulerSlackMs} observeMs=${observeMs} interpretationMs=${interp?.ms ?? 'n/a'} availability=${obs.availability} accessControl=${obs.accessControl} readiness=${readiness} readinessMs=${readinessMs} buyBoxSelector=${buyBoxSelector} soldOutTextOutsideBuyBox=${soldOutTextOutsideBuyBox}`,
   });
 
   expect(obs.provenance).toBe('live_verified');

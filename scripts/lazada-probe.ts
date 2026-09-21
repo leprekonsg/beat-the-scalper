@@ -13,6 +13,11 @@ const args = process.argv.slice(2);
 const urlArg = args.find((a) => a.startsWith('--url='))?.slice(6);
 const approvedIdx = args.indexOf('--approved');
 const approvedBy = approvedIdx >= 0 ? args[approvedIdx + 1] : null;
+// --dom-diagnostic: same single load, plus a read-only DOM map of the product panel (container ids,
+// ancestor chains of the stock line / h1 / wishlist button, and the time each landmark took to
+// become visible) so src/adapters/lazadaLive.ts's BUY_BOX_SELECTORS can be corrected from evidence.
+const domDiagnostic = args.includes('--dom-diagnostic');
+const profileArg = args.find((a) => a.startsWith('--profile='))?.slice(10);
 
 if (!urlArg || !approvedBy) {
   console.error('Usage: tsx scripts/lazada-probe.ts --url=<lazada url> --approved "<who granted permission and when>"');
@@ -29,7 +34,7 @@ if (!/(^|\.)lazada\.sg$/.test(target.hostname)) {
 const outDir = resolve(process.cwd(), 'data', 'feasibility');
 mkdirSync(outDir, { recursive: true });
 const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-const profileDir = resolve(process.cwd(), 'data', '.browser-profiles', 'lazada-probe');
+const profileDir = resolve(process.cwd(), 'data', '.browser-profiles', profileArg ?? 'lazada-probe');
 
 const result: Record<string, unknown> = {
   test: 'phase0_step4_single_observation',
@@ -54,7 +59,29 @@ page.on('framenavigated', (f) => {
 
 try {
   const response = await page.goto(target.toString(), { waitUntil: 'domcontentloaded', timeout: 45_000 });
+  // Landmark readiness timeline (read-only waits, started together right after goto): how long after
+  // domcontentloaded each region becomes visible. Runs alongside the fixed wait below, never in place of it.
+  const landmarkTimeline: Record<string, number | null> = {};
+  const landmarkWaits = domDiagnostic
+    ? Object.entries({
+        add_to_cart_module: '#module_add_to_cart',
+        stock_text: 'text=/out of stock|sold out/i',
+        price: '[class*="pdp-price"]',
+        h1: 'h1',
+        add_to_cart_button: 'button:has-text("Add to Cart")',
+        wishlist_button: 'button:has-text("Add to Wishlist")',
+      }).map(async ([key, sel]) => {
+        const t0 = performance.now();
+        try {
+          await page.waitForSelector(sel, { state: 'visible', timeout: 4000 });
+          landmarkTimeline[key] = Math.round(performance.now() - t0);
+        } catch {
+          landmarkTimeline[key] = null;
+        }
+      })
+    : [];
   await page.waitForTimeout(4000); // allow client rendering; no reloads
+  await Promise.all(landmarkWaits);
   const finalUrl = page.url();
   const status = response?.status() ?? null;
   const title = await page.title();
@@ -90,6 +117,51 @@ try {
     skuIdFromUrl: /-s(\d+)/.exec(finalUrl)?.[1] ?? null,
   };
 
+  // Read-only DOM map. `page.evaluate` only reads the live document; nothing is clicked or changed.
+  const redact = (t: string) => t.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[email]');
+  // Passed as a source string, not a function: tsx/esbuild rewrites named arrow functions with a
+  // `__name` helper that does not exist inside the page, so a function literal throws
+  // "ReferenceError: __name is not defined" at evaluate time (observed 2026-09-21).
+  const DOM_MAP_SCRIPT = String.raw`(() => {
+    const describe = (el) => {
+      if (!el) return '';
+      const id = el.id ? '#' + el.id : '';
+      const cls = el.className && typeof el.className === 'string' ? '.' + el.className.trim().split(/\s+/).slice(0, 4).join('.') : '';
+      return el.tagName.toLowerCase() + id + cls;
+    };
+    const chain = (el, depth = 10) => {
+      const out = [];
+      for (let cur = el; cur && out.length < depth; cur = cur.parentElement) out.push(describe(cur));
+      return out;
+    };
+    const textOf = (el, n = 160) => ((el && el.innerText) || '').replace(/\s+/g, ' ').trim().slice(0, n);
+    const findText = (re) => {
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (re.test(node.textContent || '')) return node.parentElement;
+      }
+      return null;
+    };
+    const stockEl = findText(/out of stock|sold out/i);
+    const wishlist = Array.from(document.querySelectorAll('button')).find((b) => /add to wishlist/i.test(b.innerText)) || null;
+    const modules = Array.from(document.querySelectorAll('[id^="module_"]')).map((el) => ({ id: el.id, tag: el.tagName.toLowerCase(), text: textOf(el, 120) }));
+    const candidates = ['#module_add_to_cart', '[class*="pdp-cart-concern"]', '[class*="pdp-mod-product-info"]', '#module_product_detail', '[class*="pdp-block__product-detail"]'].map((sel) => {
+      const el = document.querySelector(sel);
+      return { sel, count: document.querySelectorAll(sel).length, describe: describe(el), text: textOf(el, 300) };
+    });
+    return {
+      stockLine: { describe: describe(stockEl), text: textOf(stockEl, 80), ancestors: chain(stockEl) },
+      h1: { ancestors: chain(document.querySelector('h1')) },
+      wishlistButton: { ancestors: chain(wishlist) },
+      modules,
+      candidates,
+      bodyTextLength: document.body.innerText.length,
+      stockTextIndexInBody: document.body.innerText.search(/out of stock|sold out/i),
+    };
+  })()`;
+  const domMap = domDiagnostic ? ((await page.evaluate(DOM_MAP_SCRIPT)) as Record<string, unknown>) : null;
+  const domMapRedacted = domMap ? JSON.parse(redact(JSON.stringify(domMap))) : null;
+
   const screenshotPath = resolve(outDir, `lazada-probe-${stamp}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: false });
 
@@ -104,6 +176,7 @@ try {
     sessionContinuity: 'not_tested (single load; no second request made)',
     screenshot: screenshotPath,
     bodyTextExcerpt: bodyText.slice(0, 1200),
+    ...(domDiagnostic ? { landmarkTimeline, domMap: domMapRedacted } : {}),
     finishedAt: new Date().toISOString(),
   });
 } catch (err) {

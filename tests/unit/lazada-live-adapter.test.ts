@@ -9,7 +9,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  BUY_BOX_SELECTORS,
   classifyLazadaPage,
+  DECISIVE_STATE_SELECTOR,
   LazadaLiveObservationAdapter,
   parseSgdMinor,
   type LazadaLiveLocator,
@@ -110,8 +112,9 @@ describe('parseSgdMinor', () => {
   it('parses "$1,299.00" (thousands separator) as 129900 minor units', () => {
     expect(parseSgdMinor('$1,299.00')).toBe(129900);
   });
-  it('parses "From S$10" as 1000 (the first amount found is used; a range qualifier is not treated as ambiguous)', () => {
-    expect(parseSgdMinor('From S$10')).toBe(1000);
+  it('returns null for "From S$10" (a range minimum is not the selected variant\'s exact price)', () => {
+    expect(parseSgdMinor('From S$10')).toBeNull();
+    expect(parseSgdMinor('from $10.00')).toBeNull();
   });
   it('returns null for an empty string', () => {
     expect(parseSgdMinor('')).toBeNull();
@@ -126,8 +129,12 @@ describe('parseSgdMinor', () => {
     expect(parseSgdMinor('S$1,299.00')).toBe(129900);
     expect(parseSgdMinor('S$ 89.9')).toBe(8990);
   });
-  it('uses the lower bound of a range "S$89.90 - S$120.00"', () => {
-    expect(parseSgdMinor('S$89.90 - S$120.00')).toBe(8990);
+  it('returns null for a range "S$89.90 - S$120.00" (two amounts means the selection is unresolved)', () => {
+    expect(parseSgdMinor('S$89.90 - S$120.00')).toBeNull();
+    expect(parseSgdMinor('$89.90-$120.00')).toBeNull();
+  });
+  it('still parses a single exact amount that is followed by a struck-through or unrelated non-SGD amount', () => {
+    expect(parseSgdMinor('$109.90 US$80.00')).toBe(10990);
   });
   it('returns null for a discount label with no amount ("10% off")', () => {
     expect(parseSgdMinor('10% off')).toBeNull();
@@ -150,7 +157,8 @@ describe('parseSgdMinor', () => {
 // ---------------------------------------------------------------------------------------------
 // Fake LazadaLivePage
 // ---------------------------------------------------------------------------------------------
-function makeLocator(entries: { text?: string; href?: string }[]): LazadaLiveLocator {
+/** Entries additionally carry `attrs` (by `getAttribute` name) so button-enabled checks can be exercised. */
+function makeLocator(entries: { text?: string; href?: string; attrs?: Record<string, string | null> }[]): LazadaLiveLocator {
   return {
     first(): LazadaLiveLocator {
       return makeLocator(entries.slice(0, 1));
@@ -162,10 +170,126 @@ function makeLocator(entries: { text?: string; href?: string }[]): LazadaLiveLoc
       return entries[0]?.text ?? '';
     },
     async getAttribute(name: string): Promise<string | null> {
-      if (name === 'href') return entries[0]?.href ?? null;
+      const e = entries[0];
+      if (!e) return null;
+      if (e.attrs && name in e.attrs) return e.attrs[name] ?? null;
+      if (name === 'href') return e.href ?? null;
       return null;
     },
+    // Leaf locators in these tests (title/seller/price/button) never need children of their own;
+    // the buy-box locator below overrides these two with real behaviour.
+    locator(): LazadaLiveLocator {
+      return makeLocator([]);
+    },
+    getByRole(): LazadaLiveLocator {
+      return makeLocator([]);
+    },
   };
+}
+
+interface ButtonSpec {
+  /** `disabled` attribute present. */
+  disabled?: boolean;
+  /** `aria-disabled="true"`. */
+  ariaDisabled?: boolean;
+  /** class attribute contains the substring "disabled". */
+  disabledClass?: boolean;
+}
+
+function makeButtonLocator(spec: ButtonSpec | false | undefined, label: string): LazadaLiveLocator {
+  if (!spec) return makeLocator([]);
+  return makeLocator([
+    {
+      text: label,
+      attrs: {
+        disabled: spec.disabled ? '' : null,
+        'aria-disabled': spec.ariaDisabled ? 'true' : null,
+        class: spec.disabledClass ? 'btn btn-disabled' : 'btn',
+      },
+    },
+  ]);
+}
+
+interface BuyBoxSpec {
+  /** Buy box's own overall innerText; used for stock only when `#module_quantity-input` is absent. */
+  text: string;
+  /** `#module_quantity-input`'s own innerText. When set, that module "exists" (count > 0) and its
+   *  text is used for stock instead of `text`; when unset, the module is absent and `text` is used. */
+  quantityText?: string;
+  /** Whether `#module_add_to_cart` exists as a distinct module scoping button lookups (mirrors the
+   *  verified DOM: buttons always live under this module in practice, but the adapter falls back to
+   *  the buy box itself when it is absent). */
+  addToCartModule?: boolean;
+  addToCart?: ButtonSpec | false;
+  buyNow?: ButtonSpec | false;
+  /** `#module_product_price_v2`'s own innerText. */
+  priceText?: string;
+  /** A `[class*="pdp-price"]` fallback element's innerText, used only when `priceText` is absent. */
+  priceFallbackText?: string;
+}
+
+/** The buy-box selector these fakes use to stand in for whichever `BUY_BOX_SELECTORS` candidate matched. */
+const FAKE_BUY_BOX_SELECTOR = BUY_BOX_SELECTORS[0]!;
+
+/** Same regex as `SOLD_OUT_RE` in the adapter (not exported); used only to drive the fake's readiness wait. */
+const FAKE_SOLD_OUT_RE = /sold out|out of stock/i;
+
+function resolveBuyBoxButton(spec: BuyBoxSpec, options?: { name?: RegExp | string }): LazadaLiveLocator {
+  const src = options?.name instanceof RegExp ? options.name.source.toLowerCase() : String(options?.name ?? '').toLowerCase();
+  if (src.includes('add to cart')) return makeButtonLocator(spec.addToCart, 'Add to Cart');
+  if (src.includes('buy now')) return makeButtonLocator(spec.buyNow, 'Buy Now');
+  return makeLocator([]);
+}
+
+/** Stands in for `#module_add_to_cart` when `spec.addToCartModule` is true: same buttons, scoped. */
+function makeAddToCartModuleLocator(spec: BuyBoxSpec): LazadaLiveLocator {
+  const moduleLocator: LazadaLiveLocator = {
+    first: () => moduleLocator,
+    count: async () => 1,
+    innerText: async () => '',
+    getAttribute: async () => null,
+    locator: () => makeLocator([]),
+    getByRole: (_role, options) => resolveBuyBoxButton(spec, options),
+  };
+  return moduleLocator;
+}
+
+function makeBuyBoxLocator(spec: BuyBoxSpec): LazadaLiveLocator {
+  const buyBoxLocator: LazadaLiveLocator = {
+    // `.first()` must keep the buy-box behaviour (locator/button/price lookup), not fall back to a
+    // plain leaf locator -- `findBuyBox` calls `.locator(selector).first()` before using the result.
+    first(): LazadaLiveLocator {
+      return buyBoxLocator;
+    },
+    async count(): Promise<number> {
+      return 1;
+    },
+    async innerText(): Promise<string> {
+      return spec.text;
+    },
+    async getAttribute(): Promise<string | null> {
+      return null;
+    },
+    locator(selector: string): LazadaLiveLocator {
+      if (selector === '#module_quantity-input') {
+        return spec.quantityText !== undefined ? makeLocator([{ text: spec.quantityText }]) : makeLocator([]);
+      }
+      if (selector === '#module_product_price_v2') {
+        return spec.priceText !== undefined ? makeLocator([{ text: spec.priceText }]) : makeLocator([]);
+      }
+      if (selector.includes('pdp-price')) {
+        return spec.priceFallbackText !== undefined ? makeLocator([{ text: spec.priceFallbackText }]) : makeLocator([]);
+      }
+      if (selector === '#module_add_to_cart') {
+        return spec.addToCartModule ? makeAddToCartModuleLocator(spec) : makeLocator([]);
+      }
+      return makeLocator([]);
+    },
+    getByRole(_role: 'button', options?: { name?: RegExp | string }): LazadaLiveLocator {
+      return resolveBuyBoxButton(spec, options);
+    },
+  };
+  return buyBoxLocator;
 }
 
 interface FakePageConfig {
@@ -175,7 +299,6 @@ interface FakePageConfig {
   productTitle?: string | null;
   sellerText?: string | null;
   sellerHref?: string | null;
-  priceText?: string | null;
   addToCart?: boolean;
   buyNow?: boolean;
   passwordField?: boolean;
@@ -183,16 +306,25 @@ interface FakePageConfig {
   /** Thrown from every `locator().count()` call, to exercise the post-navigation failure path. */
   locatorError?: Error;
   finalUrl?: string;
+  /** When set, `FAKE_BUY_BOX_SELECTOR` (one of `BUY_BOX_SELECTORS`) resolves to this scoped buy box. */
+  buyBox?: BuyBoxSpec;
+  /**
+   * Forces `waitForSelector` to reject even though `buyBox` already has decisive content (sold-out
+   * text or a purchase button) -- simulates a page that only reaches the decisive state after the
+   * deadline, to test that a readiness timeout still parses the (already loaded) page correctly.
+   */
+  decisiveAfterTimeout?: boolean;
 }
 
 /** Every method the adapter may call on a loaded page; none of them navigates or interacts. */
-const READ_ONLY_PAGE_METHODS = new Set(['url', 'title', 'innerText', 'locator', 'getByRole', 'screenshot', 'waitForTimeout']);
+const READ_ONLY_PAGE_METHODS = new Set(['url', 'title', 'innerText', 'locator', 'getByRole', 'screenshot', 'waitForTimeout', 'waitForSelector']);
 
 class FakeLazadaPage implements LazadaLivePage {
   gotoCount = 0;
   waits: number[] = [];
   screenshots: string[] = [];
   calls: string[] = [];
+  waitForSelectorArgs: string[] = [];
   currentUrl: string;
 
   constructor(private readonly cfg: FakePageConfig = {}) {
@@ -232,8 +364,13 @@ class FakeLazadaPage implements LazadaLivePage {
         count: () => Promise.reject(err),
         innerText: () => Promise.reject(err),
         getAttribute: () => Promise.reject(err),
+        locator: () => throwing,
+        getByRole: () => throwing,
       };
       return throwing;
+    }
+    if (this.cfg.buyBox && selector === FAKE_BUY_BOX_SELECTOR) {
+      return makeBuyBoxLocator(this.cfg.buyBox);
     }
     if (selector === 'input[type="password"]') {
       return this.cfg.passwordField ? makeLocator([{ text: '' }]) : makeLocator([]);
@@ -247,9 +384,8 @@ class FakeLazadaPage implements LazadaLivePage {
     if (selector.includes('/shop/')) {
       return this.cfg.sellerHref ? makeLocator([{ text: this.cfg.sellerText ?? '', href: this.cfg.sellerHref }]) : makeLocator([]);
     }
-    if (selector.includes('pdp-price') || selector.includes('"price"')) {
-      return this.cfg.priceText ? makeLocator([{ text: this.cfg.priceText }]) : makeLocator([]);
-    }
+    // No page-wide price probe any more (price is read only from inside the buy box), so a
+    // '[class*="pdp-price"]' query straight against the page never matches in these fakes.
     return makeLocator([]);
   }
 
@@ -274,6 +410,22 @@ class FakeLazadaPage implements LazadaLivePage {
   async waitForTimeout(ms: number): Promise<void> {
     this.calls.push('waitForTimeout');
     this.waits.push(ms);
+  }
+
+  async waitForSelector(selector: string, _options?: { timeout?: number; state?: 'attached' | 'visible' }): Promise<unknown> {
+    this.calls.push('waitForSelector');
+    this.waitForSelectorArgs.push(selector);
+    // Resolves only when `selector` is `DECISIVE_STATE_SELECTOR` and the configured buy box has
+    // actually reached a decisive state (sold-out text, or any purchase button, even a disabled one
+    // -- a disabled button still carries the "Add to Cart"/"Buy Now" text `DECISIVE_STATE_SELECTOR`
+    // matches on in real Playwright).
+    if (selector !== DECISIVE_STATE_SELECTOR) throw new Error(`Timeout waiting for ${selector}`);
+    if (this.cfg.decisiveAfterTimeout) throw new Error('Timeout waiting for decisive state');
+    const bb = this.cfg.buyBox;
+    const stockText = bb ? (bb.quantityText ?? bb.text) : '';
+    const decisive = !!bb && (FAKE_SOLD_OUT_RE.test(stockText) || !!bb.addToCart || !!bb.buyNow);
+    if (!decisive) throw new Error('Timeout waiting for decisive state');
+    return undefined;
   }
 }
 
@@ -325,9 +477,8 @@ describe('LazadaLiveObservationAdapter', () => {
       productTitle: 'Pokemon TCG Scarlet & Violet Elite Trainer Box (English)',
       sellerText: 'Pokemon Store Online Singapore',
       sellerHref: '/shop/pokemon-store-online-singapore',
-      priceText: 'S$89.90',
       bodyText: 'Elite Trainer Box. Limit 2 per customer. Add to Cart is available.',
-      addToCart: true,
+      buyBox: { text: 'Quantity: [1]', quantityText: 'Quantity: [1]', priceText: 'S$89.90', addToCartModule: true, addToCart: {} },
     });
     let evidence: Evidence | null = null;
     const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1, onEvidence: (e) => (evidence = e) });
@@ -363,7 +514,7 @@ describe('LazadaLiveObservationAdapter', () => {
     const page = new FakeLazadaPage({
       productTitle: 'Elite Trainer Box',
       bodyText: 'This item is currently sold out.',
-      addToCart: true,
+      buyBox: { text: 'This item is currently sold out.', quantityText: 'This item is currently sold out.', addToCartModule: true, addToCart: {} },
     });
     const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1 });
     const obs = await adapter.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' });
@@ -372,7 +523,11 @@ describe('LazadaLiveObservationAdapter', () => {
 
   it('reports UNKNOWN availability when neither a button nor sold-out text is present', async () => {
     const dataDir = newDataDir();
-    const page = new FakeLazadaPage({ productTitle: 'Elite Trainer Box', bodyText: 'Nothing conclusive here.' });
+    const page = new FakeLazadaPage({
+      productTitle: 'Elite Trainer Box',
+      bodyText: 'Nothing conclusive here.',
+      buyBox: { text: 'Nothing conclusive here.' },
+    });
     const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1 });
     const obs = await adapter.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' });
     expect(obs.availability).toBe('UNKNOWN');
@@ -383,7 +538,7 @@ describe('LazadaLiveObservationAdapter', () => {
     const page = new FakeLazadaPage({
       productTitle: 'Elite Trainer Box',
       bodyText: 'Note: outer plastic wrap removed for quality inspection before shipping.',
-      addToCart: true,
+      buyBox: { text: 'Quantity: [1]', addToCart: {} },
     });
     const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1 });
     const obs = await adapter.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' });
@@ -426,7 +581,7 @@ describe('LazadaLiveObservationAdapter', () => {
 
   it('never throws when the onEvidence sink throws', async () => {
     const dataDir = newDataDir();
-    const page = new FakeLazadaPage({ productTitle: 'Elite Trainer Box', bodyText: 'ok', addToCart: true });
+    const page = new FakeLazadaPage({ productTitle: 'Elite Trainer Box', bodyText: 'ok', buyBox: { text: 'ok', addToCart: {} } });
     const adapter = new LazadaLiveObservationAdapter({
       page,
       productUrl: LAZADA_URL,
@@ -443,20 +598,39 @@ describe('LazadaLiveObservationAdapter', () => {
   });
 
   // -------------------------------------------------------------------------------------------
-  // Misclassification pins
+  // Buy-box requirement and misclassification pins
   // -------------------------------------------------------------------------------------------
-  it('pins: a "Sold out" badge anywhere in the body (e.g. a recommended item) reads as UNAVAILABLE even with an Add to Cart button', async () => {
-    // Documented cost in classify order (src/adapters/lazadaLive.ts): a stray badge is a missed
-    // restock, never a false candidate. Change this test deliberately if the buy-box gets scoped.
+  it('reports unsupported_layout with UNKNOWN availability, one goto, and a screenshot when no buy box selector matches a clean page', async () => {
     const dataDir = newDataDir();
     const page = new FakeLazadaPage({
       productTitle: 'Elite Trainer Box',
-      bodyText: 'Elite Trainer Box\nAdd to Cart\nYou may also like\nBooster Bundle  Sold out\nPrism Tin  S$29.90',
-      addToCart: true,
+      bodyText: 'Elite Trainer Box description, no known buy box wrapper on this page.',
     });
-    const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1 });
+    const evidences: Evidence[] = [];
+    const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1, onEvidence: (e) => evidences.push(e) });
     const obs = await adapter.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' });
-    expect(obs.availability).toBe('UNAVAILABLE');
+    expect(obs.accessControl).toBe('unsupported_layout');
+    expect(obs.availability).toBe('UNKNOWN');
+    expect(obs.offer).toBeNull();
+    expect(obs.error).toContain(BUY_BOX_SELECTORS[0]);
+    expect(evidences[0]!.snapshotRef).not.toBeNull();
+    expect(existsSync(evidences[0]!.snapshotRef!)).toBe(true);
+    expect(page.gotoCount).toBe(1);
+  });
+
+  it('with a buy box found: a "Sold out" badge from a recommendation outside the buy box does not affect availability', async () => {
+    const dataDir = newDataDir();
+    const page = new FakeLazadaPage({
+      productTitle: 'Elite Trainer Box',
+      bodyText: 'Elite Trainer Box\nQuantity: [1]\nAdd to Cart\nYou may also like\nBooster Bundle  Sold out\nPrism Tin  S$29.90',
+      buyBox: { text: 'Quantity: [1]', addToCart: {} },
+    });
+    const evidences: Evidence[] = [];
+    const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1, onEvidence: (e) => evidences.push(e) });
+    const obs = await adapter.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' });
+    expect(obs.availability).toBe('AVAILABLE');
+    expect(evidences[0]!.observedFields.buyBoxSelector).toBe(FAKE_BUY_BOX_SELECTOR);
+    expect(evidences[0]!.observedFields.soldOutTextOutsideBuyBox).toBe(true);
   });
 
   it('does not report login_expired for a product page whose header says Login and whose text mentions a password (no password field)', async () => {
@@ -464,8 +638,8 @@ describe('LazadaLiveObservationAdapter', () => {
     const page = new FakeLazadaPage({
       productTitle: 'WiFi Router AX3000',
       bodyText: 'Login | Sign Up\nWiFi Router AX3000\nDefault admin password on the label.\nAdd to Cart',
-      addToCart: true,
       passwordField: false,
+      buyBox: { text: 'Add to Cart', addToCart: {} },
     });
     const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1 });
     const obs = await adapter.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' });
@@ -485,7 +659,11 @@ describe('LazadaLiveObservationAdapter', () => {
 
   it('never claims stated_intact from body text ("sealed" in a review or carousel is not a statement about this listing)', async () => {
     const dataDir = newDataDir();
-    const page = new FakeLazadaPage({ productTitle: 'Elite Trainer Box', bodyText: 'Review: arrived sealed and intact.\nYou may also like: Booster Box Factory Sealed', addToCart: true });
+    const page = new FakeLazadaPage({
+      productTitle: 'Elite Trainer Box',
+      bodyText: 'Review: arrived sealed and intact.\nYou may also like: Booster Box Factory Sealed',
+      buyBox: { text: 'Quantity: [1]', addToCart: {} },
+    });
     const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1 });
     const obs = await adapter.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' });
     expect(obs.offer?.packagingCondition).toBe('unreadable');
@@ -493,12 +671,170 @@ describe('LazadaLiveObservationAdapter', () => {
 
   it('reads a purchase limit only from purchase wording, not from "Limited 1 year warranty"', async () => {
     const dataDir = newDataDir();
-    const warranty = new FakeLazadaPage({ productTitle: 'Elite Trainer Box', bodyText: 'Limited 1 year warranty. Limited time offer.', addToCart: true });
+    const warranty = new FakeLazadaPage({
+      productTitle: 'Elite Trainer Box',
+      bodyText: 'Limited 1 year warranty. Limited time offer.',
+      buyBox: { text: 'Quantity: [1]', addToCart: {} },
+    });
     const a = new LazadaLiveObservationAdapter({ page: warranty, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1 });
     expect((await a.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' })).offer?.purchaseLimit).toBeNull();
-    const limited = new FakeLazadaPage({ productTitle: 'Elite Trainer Box', bodyText: 'Limited to 3 pcs per order.', addToCart: true });
+    const limited = new FakeLazadaPage({
+      productTitle: 'Elite Trainer Box',
+      bodyText: 'Limited to 3 pcs per order.',
+      buyBox: { text: 'Quantity: [1]', addToCart: {} },
+    });
     const b = new LazadaLiveObservationAdapter({ page: limited, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1 });
     expect((await b.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' })).offer?.purchaseLimit).toBe(3);
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // Buy-box scoping and readiness wait
+  // -------------------------------------------------------------------------------------------
+  it('buy box with "Out of stock" text (via #module_quantity-input) and no buttons reads UNAVAILABLE', async () => {
+    const dataDir = newDataDir();
+    const page = new FakeLazadaPage({
+      productTitle: 'Elite Trainer Box',
+      bodyText: 'Elite Trainer Box\nQuantity: [0] Out of stock',
+      buyBox: { text: 'Quantity: [0] Out of stock', quantityText: 'Quantity: [0] Out of stock' },
+    });
+    const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1 });
+    const obs = await adapter.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' });
+    expect(obs.availability).toBe('UNAVAILABLE');
+  });
+
+  it('wishlist-only button ("Add to Wishlist", not matching /add to cart/i or /buy now/i) with "Out of stock" reads UNAVAILABLE', async () => {
+    const dataDir = newDataDir();
+    const page = new FakeLazadaPage({
+      productTitle: 'Elite Trainer Box',
+      bodyText: 'Elite Trainer Box\nQuantity: [0] Out of stock',
+      // #module_add_to_cart exists, but the only button in it is "Add to Wishlist" -- neither the
+      // add-to-cart nor buy-now regex matches it, mirroring the verified DOM's class-alone trap.
+      buyBox: { text: 'Quantity: [0] Out of stock', quantityText: 'Quantity: [0] Out of stock', addToCartModule: true },
+    });
+    const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1 });
+    const obs = await adapter.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' });
+    expect(obs.availability).toBe('UNAVAILABLE');
+  });
+
+  it('wishlist-only button with no stock text reads UNKNOWN', async () => {
+    const dataDir = newDataDir();
+    const page = new FakeLazadaPage({
+      productTitle: 'Elite Trainer Box',
+      bodyText: 'Elite Trainer Box\nQuantity: [0]',
+      buyBox: { text: 'Quantity: [0]', quantityText: 'Quantity: [0]', addToCartModule: true },
+    });
+    const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1 });
+    const obs = await adapter.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' });
+    expect(obs.availability).toBe('UNKNOWN');
+  });
+
+  it('buy box with a disabled Add to Cart (disabled attribute, aria-disabled, or a "disabled" class) reads UNKNOWN, not UNAVAILABLE (disabled proves nothing about stock)', async () => {
+    const dataDir = newDataDir();
+    for (const spec of [{ disabled: true }, { ariaDisabled: true }, { disabledClass: true }]) {
+      const page = new FakeLazadaPage({
+        productTitle: 'Elite Trainer Box',
+        bodyText: 'Elite Trainer Box\nQuantity: [1]',
+        buyBox: { text: 'Quantity: [1]', addToCart: spec },
+      });
+      const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1 });
+      const obs = await adapter.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' });
+      expect(obs.availability, `spec ${JSON.stringify(spec)}`).toBe('UNKNOWN');
+    }
+  });
+
+  it('buy box with an enabled Buy Now only (no Add to Cart) reads AVAILABLE', async () => {
+    const dataDir = newDataDir();
+    const page = new FakeLazadaPage({
+      productTitle: 'Elite Trainer Box',
+      bodyText: 'Elite Trainer Box\nQuantity: [1]',
+      buyBox: { text: 'Quantity: [1]', addToCart: false, buyNow: {} },
+    });
+    const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1 });
+    const obs = await adapter.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' });
+    expect(obs.availability).toBe('AVAILABLE');
+  });
+
+  it('buy box present with no buttons and no sold-out text reads UNKNOWN', async () => {
+    const dataDir = newDataDir();
+    const page = new FakeLazadaPage({
+      productTitle: 'Elite Trainer Box',
+      bodyText: 'Elite Trainer Box\nSomething unrelated',
+      buyBox: { text: 'Something unrelated' },
+    });
+    const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1 });
+    const obs = await adapter.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' });
+    expect(obs.availability).toBe('UNKNOWN');
+  });
+
+  it('price from #module_product_price_v2 is preferred over another pdp-price element in the buy box', async () => {
+    const dataDir = newDataDir();
+    const page = new FakeLazadaPage({
+      productTitle: 'Elite Trainer Box',
+      bodyText: 'Elite Trainer Box\nQuantity: [1]',
+      buyBox: { text: 'Quantity: [1]', addToCart: {}, priceText: 'S$89.90', priceFallbackText: 'S$999.00' },
+    });
+    const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1 });
+    const obs = await adapter.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' });
+    expect(obs.offer?.itemPriceMinor).toBe(8990);
+  });
+
+  it('falls back to a pdp-price element when #module_product_price_v2 is absent', async () => {
+    const dataDir = newDataDir();
+    const page = new FakeLazadaPage({
+      productTitle: 'Elite Trainer Box',
+      bodyText: 'Elite Trainer Box\nQuantity: [1]',
+      buyBox: { text: 'Quantity: [1]', addToCart: {}, priceFallbackText: 'S$89.90' },
+    });
+    const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1 });
+    const obs = await adapter.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' });
+    expect(obs.offer?.itemPriceMinor).toBe(8990);
+  });
+
+  it('a readiness timeout still parses the page and records readiness "timeout"', async () => {
+    const dataDir = newDataDir();
+    const page = new FakeLazadaPage({
+      productTitle: 'Elite Trainer Box',
+      bodyText: 'Elite Trainer Box\nOut of stock',
+      // The buy box already has decisive (sold-out) content, but the deadline is simulated as
+      // passing before the wait observes it -- readiness should still be 'timeout', and the parse
+      // that follows must still read the already-loaded sold-out state correctly.
+      buyBox: { text: 'Out of stock', quantityText: 'Out of stock' },
+      decisiveAfterTimeout: true,
+    });
+    const evidences: Evidence[] = [];
+    const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1, onEvidence: (e) => evidences.push(e) });
+    const obs = await adapter.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' });
+    expect(obs.availability).toBe('UNAVAILABLE'); // timeout still parses the loaded page correctly
+    expect(evidences[0]!.observedFields.readiness).toBe('timeout');
+  });
+
+  it('readiness success records readiness "decisive" and a buyBoxSelector from BUY_BOX_SELECTORS', async () => {
+    const dataDir = newDataDir();
+    const page = new FakeLazadaPage({
+      productTitle: 'Elite Trainer Box',
+      bodyText: 'Elite Trainer Box\nQuantity: [1]',
+      buyBox: { text: 'Quantity: [1]', addToCart: {} },
+    });
+    const evidences: Evidence[] = [];
+    const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1, onEvidence: (e) => evidences.push(e) });
+    const obs = await adapter.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' });
+    expect(obs.availability).toBe('AVAILABLE');
+    expect(evidences[0]!.observedFields.readiness).toBe('decisive');
+    expect(BUY_BOX_SELECTORS).toContain(evidences[0]!.observedFields.buyBoxSelector);
+  });
+
+  it('never calls waitForTimeout (readiness replaces the fixed settle wait) and waits on DECISIVE_STATE_SELECTOR', async () => {
+    const dataDir = newDataDir();
+    const page = new FakeLazadaPage({
+      productTitle: 'Elite Trainer Box',
+      bodyText: 'ok',
+      buyBox: { text: 'ok', addToCart: {} },
+    });
+    const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1 });
+    await adapter.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' });
+    expect(page.calls).not.toContain('waitForTimeout');
+    expect(page.calls).toContain('waitForSelector');
+    expect(page.waitForSelectorArgs).toEqual([DECISIVE_STATE_SELECTOR]);
   });
 
   // -------------------------------------------------------------------------------------------
@@ -514,10 +850,35 @@ describe('LazadaLiveObservationAdapter', () => {
     { name: 'rate_limited with Retry-After 45', cfg: { status: 429, headers: { 'retry-after': '45' } }, accessControl: 'rate_limited', availability: 'UNKNOWN', errorRe: /429/ },
     { name: 'login_expired', cfg: { bodyText: 'Login\nForgot password?', passwordField: true }, accessControl: 'login_expired', availability: 'UNKNOWN', errorRe: /Login wall/ },
     { name: 'http_503', cfg: { status: 503, productTitle: 'Service Unavailable' }, accessControl: 'none', availability: 'UNKNOWN', errorRe: /^http_503$/ },
-    { name: 'unsupported_layout', cfg: { bodyText: 'Some page' }, accessControl: 'unsupported_layout', availability: 'UNKNOWN', errorRe: /unsupported layout/ },
-    { name: 'clean AVAILABLE', cfg: { productTitle: 'Elite Trainer Box', bodyText: 'ok', priceText: 'S$89.90', buyNow: true }, accessControl: 'none', availability: 'AVAILABLE', errorRe: null },
-    { name: 'clean UNAVAILABLE', cfg: { productTitle: 'Elite Trainer Box', bodyText: 'Out of stock', priceText: 'US$89.90' }, accessControl: 'none', availability: 'UNAVAILABLE', errorRe: null },
-    { name: 'clean UNKNOWN', cfg: { productTitle: 'Elite Trainer Box', bodyText: 'ok', priceText: '$99999999999999999999' }, accessControl: 'none', availability: 'UNKNOWN', errorRe: null },
+    { name: 'unsupported_layout (missing title)', cfg: { bodyText: 'Some page' }, accessControl: 'unsupported_layout', availability: 'UNKNOWN', errorRe: /unsupported layout/ },
+    {
+      name: 'unsupported_layout (no buy box)',
+      cfg: { productTitle: 'Elite Trainer Box', bodyText: 'Elite Trainer Box, no buy box wrapper here.' },
+      accessControl: 'unsupported_layout',
+      availability: 'UNKNOWN',
+      errorRe: /not found \(unsupported layout\)/,
+    },
+    {
+      name: 'clean AVAILABLE',
+      cfg: { productTitle: 'Elite Trainer Box', bodyText: 'ok', buyBox: { text: 'ok', priceText: 'S$89.90', addToCart: false, buyNow: {} } },
+      accessControl: 'none',
+      availability: 'AVAILABLE',
+      errorRe: null,
+    },
+    {
+      name: 'clean UNAVAILABLE',
+      cfg: { productTitle: 'Elite Trainer Box', bodyText: 'Out of stock', buyBox: { text: 'Out of stock', quantityText: 'Out of stock', priceFallbackText: 'US$89.90' } },
+      accessControl: 'none',
+      availability: 'UNAVAILABLE',
+      errorRe: null,
+    },
+    {
+      name: 'clean UNKNOWN',
+      cfg: { productTitle: 'Elite Trainer Box', bodyText: 'ok', buyBox: { text: 'ok', priceFallbackText: '$99999999999999999999' } },
+      accessControl: 'none',
+      availability: 'UNKNOWN',
+      errorRe: null,
+    },
   ];
 
   for (const branch of BRANCHES) {
@@ -551,7 +912,7 @@ describe('LazadaLiveObservationAdapter', () => {
     const dataDir = newDataDir();
     const filler = 'Elite Trainer Box description line. '.repeat(400); // >6000 chars
     const bodyText = `Hello, shopper.name.2021@example.com | Login\n${filler}`;
-    const page = new FakeLazadaPage({ productTitle: 'Elite Trainer Box', bodyText, addToCart: true });
+    const page = new FakeLazadaPage({ productTitle: 'Elite Trainer Box', bodyText, buyBox: { text: 'ok', addToCart: {} } });
     const evidences: Evidence[] = [];
     const adapter = new LazadaLiveObservationAdapter({ page, productUrl: LAZADA_URL, approvedBy: APPROVED_BY, dataDir, settleMs: 1, onEvidence: (e) => evidences.push(e) });
     await adapter.observeTarget({ missionId: 'msn_001', intent, now: '2026-09-19T05:00:00.000Z' });

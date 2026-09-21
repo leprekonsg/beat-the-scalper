@@ -137,6 +137,39 @@ Runner: `npm run lazada:live-reaction` (`scripts/lazada-live-reaction.ts`) with 
 - Cumulative 2026-09-19 from fresh profiles: 65 loads at 120 s across five runs (10, 10, 19, 27 and 61 minutes) plus one aborted load, no challenge. The window 12:58 to 15:04 SGT (one 11-minute gap, 13:17 to 13:28) produced no AVAILABLE read, so the worker-path CANDIDATE -> VALIDATING -> CHECKOUT_READY transition still has no live measurement.
 - Still not exercised live: CANDIDATE/CHECKOUT_READY, a run longer than 61 minutes, logged-in profile, preparation.
 
+**Run 6** (approved in session 2026-09-21, "yes do the live run": 120 s, 5 reads, `--max-per-minute=2`, `--provider=none`, fresh profile `lazada-reaction-f`; purpose: verify the buy-box selectors and measure the readiness wait that replaced the fixed 4 s settle). Time 02:16 to 02:25 UTC (10:16 to 10:25 SGT). Record `data/feasibility/lazada-live-reaction-2026-09-21T02-16-05-005Z.json` (gitignored).
+
+| Metric | p50 | p95 | n |
+| --- | --- | --- | --- |
+| Scheduler slack | 716 ms | 1010 ms | 5 |
+| Observe (one goto, readiness wait, parse) | 1770 ms | 6064 ms (read 1, cold profile) | 5 |
+| Readiness wait (container visible) | 1133 ms | 2029 ms | 5 |
+| Parse only | 366 ms | 982 ms | 5 |
+
+- 5/5 reads HTTP 200, no challenge, executor never called. `buyBoxSelector` was `#module_add_to_cart` on every read (first candidate to match), `readiness` `buy_box` on every read.
+- Defect: availability was UNKNOWN on all 5 reads where UNAVAILABLE was correct (screenshots show "Out of stock"). `#module_add_to_cart` holds only the button area, not the quantity line that carries the stock text. On 2 of 5 reads the stock text was also absent from the body text at parse time although present in the screenshot taken moments later: the container renders before the stock line does, so "container visible" is not "state observable". No false candidate was possible (UNKNOWN to AVAILABLE still raises one), but the claim was weaker than before.
+
+**DOM diagnostic** (approved in session 2026-09-21, "go": one load, `scripts/lazada-probe.ts --dom-diagnostic`, fresh profile `lazada-probe-c`, 02:44 UTC; a first attempt on profile `lazada-probe-b` at 02:28 UTC loaded the page but failed before recording anything because tsx injects a `__name` helper into functions passed to `page.evaluate`; the script now passes the DOM walk as a source string). Record `data/feasibility/lazada-probe-2026-09-21T02-44-52-099Z.json` (gitignored). Verified structure of the product panel:
+
+- Buy box: `div.pdp-block.pdp-v2-block__product-detail` (its id is a random `block-...`). Children in order: `#module_product_title_1` (h1), `#module_product_price_v2` ("$109.90"), `#module_seller_warranty`, `#module_sku-select`, `#module_quantity-input` ("Quantity: Out of stock"), `#module_add_to_cart` (`.pdp-cart-concern-v2 > .pdp-cart-concern-btn > button.add-to-cart-buy-now-btn`; out of stock, the only button is "Add to Wishlist", which carries the same class as the purchase buttons).
+- `_mini` duplicates (`#module_quantity-input_mini`, `#module_add_to_cart_mini`, `#module_product_price_v2_mini`) exist for a sticky bar and are empty. `#module_product_detail` is the description block lower on the page, not the buy box. The first DOM match of `[class*="pdp-price"]` never became visible within 4 s although the visible price was read fine, so waits must target decisive elements, not broad selectors.
+- Landmark visibility after domcontentloaded: h1 2150 ms, stock text 2410 ms, wishlist button 2409 ms, `#module_add_to_cart` 2428 ms. Body text 5679 chars, stock text at offset 658.
+
+Adapter after the diagnostic: `BUY_BOX_SELECTORS` is `.pdp-v2-block__product-detail` with `[class*="block__product-detail"]` as the only fallback; readiness waits for a decisive element inside the buy box (`#module_quantity-input` containing "out of stock"/"sold out", or an "Add to Cart"/"Buy Now" button in `#module_add_to_cart`), recorded as `readiness: 'decisive' | 'timeout'`; a clean page without the buy box is `unsupported_layout` (UNKNOWN), no page-wide fallback; a present-but-disabled purchase button is UNKNOWN; a "From" or range price is a null price with the raw text kept in evidence.
+
+**Run 7** (approved in session 2026-09-21, "yes go ahead": 60 s, 3 reads, `--provider=none`, fresh profile `lazada-rerun-a`; purpose: re-measure the verified selectors and the decisive readiness wait). Time 03:00 to 03:02 UTC (11:00 to 11:02 SGT). Record `data/feasibility/lazada-live-reaction-2026-09-21T03-00-26-104Z.json` (gitignored).
+
+| metric | p50 | p95 / max |
+| --- | --- | --- |
+| scheduler slack | 651 ms | 1004 ms |
+| observe | 1908 ms | 5274 ms |
+| readiness | 1523 ms | 1929 ms |
+| parse | 90 ms | 187 ms |
+
+- 3/3 reads HTTP 200, no challenge, executor never called. Availability `UNAVAILABLE` on every read, which the screenshots confirm; the Run 6 defect (UNKNOWN on an out-of-stock page) is gone.
+- `buyBoxSelector` was `.pdp-v2-block__product-detail` on every read, `readiness` `decisive` on every read, `soldOutTextOutsideBuyBox` false on every read. No timeout, so the hydration lag seen in Run 6 is now absorbed by the wait rather than mis-parsed.
+- Readiness is about 1.5 s of the 1.9 s median observe, and the first read paid a cold-profile load (5.1 s). Parse stayed under 200 ms because the scoped rules read three small modules instead of the whole body.
+
 ## Step 5: preparation action
 
 - Status: not attempted. Adding to a real cart requires a logged-in Lazada account and mutates account state. This needs a separate explicit approval, a dedicated logged-in profile created by the user, and a documented non-submitting control. A working page read does not authorise it.

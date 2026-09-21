@@ -4,9 +4,38 @@
  * wiring never supplies it, so this file changes no default behaviour on its own.
  *
  * Rules mirrored from scripts/lazada-probe.ts (the single-read probe this build's evidence is
- * based on): exactly one `page.goto` per observation, a fixed settle wait, then read-only parsing.
- * Never reload, click, type, scroll, log in, or interact with any challenge/captcha -- an access
- * control signal is reported and left for the worker/operator to handle, never bypassed.
+ * based on): exactly one `page.goto` per observation, a readiness wait for a decisive element
+ * inside the buy box (bounded by `settleMs`, never a fixed sleep -- `waitForTimeout` is never
+ * called), then read-only parsing. Never reload, click, type, scroll, log in, or interact with any
+ * challenge/captcha -- an access control signal is reported and left for the worker/operator to
+ * handle, never bypassed.
+ *
+ * Buy box structure verified live against Lazada SG (2026-09-21, diagnostic probe
+ * data/feasibility/lazada-probe-2026-09-21T02-44-52-099Z.json): the product panel ("buy box") is
+ * `div.pdp-block.pdp-v2-block__product-detail` (its `id` is a random `block-xxxx` -- never match on
+ * an id of that shape). In DOM order it contains `#module_product_title_1`
+ * (h1.pdp-mod-product-badge-title-v2), `#module_product_price_v2` (e.g. "$109.90"),
+ * `#module_seller_warranty`, `#module_sku-select`, `#module_quantity-input` (text
+ * "Quantity: Out of stock" when out of stock), and `#module_add_to_cart`
+ * (`.pdp-cart-concern-v2 > .pdp-cart-concern-btn > button.add-to-cart-buy-now-btn`). When out of
+ * stock the ONLY button under `#module_add_to_cart` is "Add to Wishlist", which also carries the
+ * `add-to-cart-buy-now-btn` class -- class alone never identifies a purchase control; buttons are
+ * matched by accessible name (`/add to cart/i`, `/buy now/i`) only. `_mini` duplicates
+ * (`#module_quantity-input_mini`, `#module_add_to_cart_mini`, `#module_product_price_v2_mini`) exist
+ * for a sticky bar, are empty/hidden, and are never matched (exact ids only). `#module_add_to_cart`
+ * alone is too narrow to use as the buy box (it excludes the stock line -- a live 5-read run with it
+ * as the buy box misread every UNAVAILABLE case as UNKNOWN). `#module_product_detail` is the
+ * description block lower on the page, NOT the buy box; `[class*="pdp-mod-product-info"]` matches a
+ * sub-section, not the buy box; neither is used any more. See `BUY_BOX_SELECTORS` and
+ * `DECISIVE_STATE_SELECTOR`.
+ *
+ * There is no page-wide fallback: when no `BUY_BOX_SELECTORS` candidate matches on an otherwise
+ * clean page, the layout is unsupported and the observation is UNKNOWN with
+ * `accessControl: 'unsupported_layout'` (see `parseLoadedPage`). A live run on 2026-09-21 also found
+ * that a broad selector's first DOM match can be a hidden element (e.g. `[class*="pdp-price"]`) and
+ * that a container can become visible before the state inside it is observable (landmark timings on
+ * that load, from domcontentloaded: h1 2150ms, stock text 2410ms, buttons 2409ms) -- readiness
+ * therefore waits on `DECISIVE_STATE_SELECTOR`, not on buy-box container visibility.
  *
  * `classifyLazadaPage` and `parseSgdMinor` are pure and exported so they are unit-testable without
  * Playwright; `observeTarget` is exercised with a fake `LazadaLivePage` in
@@ -34,6 +63,8 @@ export interface LazadaLiveLocator {
   count(): Promise<number>;
   innerText(options?: { timeout?: number }): Promise<string>;
   getAttribute(name: string, options?: { timeout?: number }): Promise<string | null>;
+  locator(selector: string): LazadaLiveLocator;
+  getByRole(role: 'button', options?: { name?: RegExp | string }): LazadaLiveLocator;
 }
 
 export interface LazadaLiveResponse {
@@ -50,6 +81,7 @@ export interface LazadaLivePage {
   getByRole(role: 'button', options?: { name?: RegExp | string }): LazadaLiveLocator;
   screenshot(options: { path: string }): Promise<unknown>;
   waitForTimeout(ms: number): Promise<void>;
+  waitForSelector(selector: string, options?: { timeout?: number; state?: 'attached' | 'visible' }): Promise<unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -114,25 +146,55 @@ export function classifyLazadaPage(input: LazadaPageClassificationInput): Lazada
 }
 
 /**
- * Extracts the first "S$"/"$" amount in `text` into integer SGD minor units (cents). Judgement
- * call: a leading qualifier like "From S$10" is not treated as ambiguous -- the first amount found
- * is used as the item price (the lower bound of a range is still a real, checkable price). Only a
- * genuinely absent amount (no `$` at all) returns null; this is documented here rather than guessed
- * silently because the brief left the range case open ("pick one and document").
+ * Extracts a single exact "S$"/"$" amount in `text` into integer SGD minor units (cents). A range
+ * ("S$89.90 - S$120.00", two amounts) or a "From S$10" qualifier is the minimum of an unresolved
+ * variant selection, not the selected item's price, so it returns null: the raw price text is kept
+ * in evidence and policy treats a null price as an unknown delivered total (never a rejection and
+ * never a false pass). A genuinely absent amount (no `$` at all) also returns null.
  *
  * A `$` preceded by a letter other than the SGD "S" (US$, A$, HK$, NT$, ...) is another currency and
  * is never reported as SGD. Amounts outside the safe-integer range return null rather than an
  * observation that fails `OfferedItemSchema`.
  */
+const SGD_AMOUNT_RE = /(?<![A-Za-z])(?:S\$|\$)\s?(\d[\d,]*(?:\.\d{1,2})?)/g;
+const PRICE_RANGE_QUALIFIER_RE = /\bfrom\b/i;
+
 export function parseSgdMinor(text: string | null): number | null {
   if (!text) return null;
-  const match = /(?<![A-Za-z])(?:S\$|\$)\s?(\d[\d,]*(?:\.\d{1,2})?)/.exec(text);
-  if (!match) return null;
+  const matches = Array.from(text.matchAll(SGD_AMOUNT_RE));
+  if (matches.length !== 1) return null;
+  if (PRICE_RANGE_QUALIFIER_RE.test(text)) return null;
+  const match = matches[0]!;
   const numeric = Number.parseFloat(match[1]!.replace(/,/g, ''));
   if (!Number.isFinite(numeric)) return null;
   const minor = Math.round(numeric * 100);
   return Number.isSafeInteger(minor) ? minor : null;
 }
+
+/**
+ * Buy-box container candidates, tried in order, first match wins. Verified live against Lazada SG
+ * on 2026-09-21 (data/feasibility/lazada-probe-2026-09-21T02-44-52-099Z.json): the product panel is
+ * `div.pdp-block.pdp-v2-block__product-detail`. The first entry is that verified class; the second
+ * is a tolerant fallback for a class rename between a `pdp-v2-`/`pdp-v3-` prefix swap (the
+ * `block__product-detail` suffix presumed stable). No xpath entry and no other guessed candidate --
+ * `findBuyBox`/`parseLoadedPage` records which one matched so a live run tells us if the fallback
+ * ever fires.
+ */
+export const BUY_BOX_SELECTORS = ['.pdp-v2-block__product-detail', '[class*="block__product-detail"]'];
+
+/**
+ * Decisive, visible-when-rendered elements inside the buy box. Readiness waits on this (not on buy
+ * box container visibility) because a container can become visible before the state inside it is
+ * observable -- on the 2026-09-21 probe load, the container was visible before the stock text had
+ * landed in body text. Each branch matches only once the buy box has actually reached a determinate
+ * state: a rendered out-of-stock/sold-out quantity line, or an actionable purchase button.
+ */
+export const DECISIVE_STATE_SELECTOR = [
+  '#module_quantity-input:has-text("out of stock")',
+  '#module_quantity-input:has-text("sold out")',
+  '#module_add_to_cart button:has-text("Add to Cart")',
+  '#module_add_to_cart button:has-text("Buy Now")',
+].join(', ');
 
 const REMOVED_RE_A = /\b(wrapping|plastic|seal(?:ed)?)\b[\s\S]{0,40}\bremoved\b/i;
 const REMOVED_RE_B = /\bremoved\b[\s\S]{0,40}\b(wrapping|plastic|seal)\b/i;
@@ -175,7 +237,11 @@ export interface LazadaLiveObservationAdapterOptions {
   dataDir?: string;
   /** Who approved this run and when; required non-empty, recorded for audit but never sent anywhere. */
   approvedBy: string;
-  /** Wait after `goto` before parsing, to let client-side rendering settle. Default 4000ms (probe default). */
+  /**
+   * Maximum time to wait after `goto` for `DECISIVE_STATE_SELECTOR` to become visible before giving
+   * up and parsing the page as-is (option name kept as `settleMs` for existing callers/scripts).
+   * Default 4000ms (probe default).
+   */
   settleMs?: number;
 }
 
@@ -296,20 +362,73 @@ export class LazadaLiveObservationAdapter implements ObservationAdapter {
     return null;
   }
 
+  /** Same probe, scoped to a locator (e.g. the buy box) instead of the whole page. */
+  private async probeWithin(root: LazadaLiveLocator, selectors: string[]): Promise<string | null> {
+    for (const s of selectors) {
+      const loc = root.locator(s).first();
+      if ((await loc.count()) > 0) {
+        const t = (await loc.innerText().catch(() => '')).trim();
+        if (t) return t.slice(0, 200);
+      }
+    }
+    return null;
+  }
+
+  /** First `BUY_BOX_SELECTORS` candidate present on the page, in order, or null if none match. */
+  private async findBuyBox(): Promise<{ selector: string; locator: LazadaLiveLocator } | null> {
+    for (const selector of BUY_BOX_SELECTORS) {
+      const loc = this.page.locator(selector).first();
+      if ((await loc.count()) > 0) return { selector, locator: loc };
+    }
+    return null;
+  }
+
+  /**
+   * A button counts as enabled unless it carries a `disabled` attribute, `aria-disabled="true"`, or
+   * a class attribute containing the substring "disabled". Absence of the element itself is a
+   * separate concern (callers check `count()` first).
+   */
+  private async isButtonEnabled(loc: LazadaLiveLocator): Promise<boolean> {
+    const disabled = await loc.getAttribute('disabled').catch(() => null);
+    if (disabled !== null) return false;
+    const ariaDisabled = await loc.getAttribute('aria-disabled').catch(() => null);
+    if (ariaDisabled === 'true') return false;
+    const className = await loc.getAttribute('class').catch(() => null);
+    if (className && className.includes('disabled')) return false;
+    return true;
+  }
+
   async observeTarget(req: ObserveRequest): Promise<Observation> {
     const capturedAt = this.now().toISOString();
     const evidenceId = `evd_${randomUUID()}`;
 
-    // Exactly one navigation, then a fixed settle wait. No reload, click, type, scroll, or login
-    // ever happens on this path.
+    // Exactly one navigation. No reload, click, type, scroll, or login ever happens on this path.
     const loadStart = performance.now();
     let response: LazadaLiveResponse | null = null;
     let navError: string | null = null;
     try {
       response = await this.page.goto(this.productUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-      await this.page.waitForTimeout(this.settleMs);
     } catch (err) {
       navError = describeError(err);
+    }
+
+    // Readiness wait: block (up to `settleMs`) for a decisive state inside the buy box to become
+    // visible, instead of a fixed sleep (`waitForTimeout` is never called). A timeout is not a
+    // navigation failure -- the page is still parsed as loaded either way; a sold-out line that
+    // renders between the deadline and the parse is still valid evidence, and the scoped rules below
+    // correctly yield UNKNOWN when nothing decisive is actually present. `readiness` records which
+    // happened so a live run tells us how often the wait is actually needed.
+    let readiness: 'decisive' | 'timeout' = 'timeout';
+    let readinessMs = 0;
+    if (navError === null) {
+      const readinessStart = performance.now();
+      try {
+        await this.page.waitForSelector(DECISIVE_STATE_SELECTOR, { timeout: this.settleMs, state: 'visible' });
+        readiness = 'decisive';
+      } catch {
+        readiness = 'timeout';
+      }
+      readinessMs = performance.now() - readinessStart;
     }
     const loadMs = performance.now() - loadStart;
 
@@ -331,7 +450,7 @@ export class LazadaLiveObservationAdapter implements ObservationAdapter {
     // failure (page closed mid-parse) or a value the domain schema rejects is reported as an
     // UNKNOWN observation, never thrown into the worker tick.
     try {
-      return await this.parseLoadedPage(req, { capturedAt, evidenceId, loadMs, response });
+      return await this.parseLoadedPage(req, { capturedAt, evidenceId, loadMs, response, readiness, readinessMs });
     } catch (err) {
       const parseError = describeError(err);
       const snapshotRef = await this.captureScreenshot(evidenceId);
@@ -341,7 +460,15 @@ export class LazadaLiveObservationAdapter implements ObservationAdapter {
         pageRevision: null,
         targetRef: req.intent.target.retailerProductId,
         variantRef: req.intent.target.variantId,
-        observedFields: { loadMs, parseMs: null, httpStatus: response ? response.status() : null, finalUrl: this.safeUrl(), error: parseError },
+        observedFields: {
+          loadMs,
+          parseMs: null,
+          httpStatus: response ? response.status() : null,
+          finalUrl: this.safeUrl(),
+          error: parseError,
+          readiness,
+          readinessMs,
+        },
         snapshotRef,
       });
       return this.unknownObservation(req.missionId, capturedAt, `Parse failed: ${parseError}`, 'none', null, evidenceId, evidence, 'parse-error');
@@ -350,9 +477,16 @@ export class LazadaLiveObservationAdapter implements ObservationAdapter {
 
   private async parseLoadedPage(
     req: ObserveRequest,
-    ctx: { capturedAt: string; evidenceId: string; loadMs: number; response: LazadaLiveResponse | null },
+    ctx: {
+      capturedAt: string;
+      evidenceId: string;
+      loadMs: number;
+      response: LazadaLiveResponse | null;
+      readiness: 'decisive' | 'timeout';
+      readinessMs: number;
+    },
   ): Promise<Observation> {
-    const { capturedAt, evidenceId, loadMs, response } = ctx;
+    const { capturedAt, evidenceId, loadMs, response, readiness, readinessMs } = ctx;
     const parseStart = performance.now();
     const finalUrl = this.safeUrl();
     const httpStatus = response ? response.status() : null;
@@ -374,13 +508,39 @@ export class LazadaLiveObservationAdapter implements ObservationAdapter {
         pageRevision: null,
         targetRef: req.intent.target.retailerProductId,
         variantRef: req.intent.target.variantId,
-        observedFields: { loadMs, parseMs, httpStatus, finalUrl, pageTitle: title, accessControl: classification.accessControl, bodyTextExcerpt },
+        observedFields: { loadMs, parseMs, httpStatus, finalUrl, pageTitle: title, accessControl: classification.accessControl, bodyTextExcerpt, readiness, readinessMs },
         snapshotRef,
       });
       return this.unknownObservation(req.missionId, capturedAt, classification.error, classification.accessControl, classification.retryAfterSeconds, evidenceId, evidence);
     }
 
-    // Clean page: parse the offer.
+    // Clean page: the buy box is now required to parse an offer at all (no page-wide fallback --
+    // see the file header). Its absence is a distinct, honest signal: the layout has moved and the
+    // candidate list needs updating, not a stock read from unrelated page furniture.
+    const buyBox = await this.findBuyBox();
+    if (!buyBox) {
+      const parseMs = performance.now() - parseStart;
+      const snapshotRef = await this.captureScreenshot(evidenceId);
+      const evidence = this.buildEvidence({
+        evidenceId,
+        capturedAt,
+        pageRevision: null,
+        targetRef: req.intent.target.retailerProductId,
+        variantRef: req.intent.target.variantId,
+        observedFields: { loadMs, parseMs, httpStatus, finalUrl, pageTitle: title, productTitle, readiness, readinessMs, bodyTextExcerpt },
+        snapshotRef,
+      });
+      return this.unknownObservation(
+        req.missionId,
+        capturedAt,
+        `Buy box (${BUY_BOX_SELECTORS[0]}) not found (unsupported layout)`,
+        'unsupported_layout',
+        null,
+        evidenceId,
+        evidence,
+      );
+    }
+
     const sellerLabel = await this.probe(['[class*="seller-name"]', 'a[href*="/shop/"]']);
     let sellerRef: string | null = null;
     const shopLink = this.page.locator('a[href*="/shop/"]').first();
@@ -390,7 +550,17 @@ export class LazadaLiveObservationAdapter implements ObservationAdapter {
       sellerRef = m ? m[1]! : null;
     }
 
-    const priceText = await this.probe(['[class*="pdp-price"]', '[class*="price"]']);
+    // Price: the verified `#module_product_price_v2` module first, then a tolerant class-based
+    // fallback scoped to the buy box, then null. No page-wide price probe any more.
+    const priceModule = buyBox.locator.locator('#module_product_price_v2').first();
+    let priceText: string | null = null;
+    if ((await priceModule.count()) > 0) {
+      const t = (await priceModule.innerText().catch(() => '')).trim();
+      if (t) priceText = t.slice(0, 200);
+    }
+    if (priceText === null) {
+      priceText = await this.probeWithin(buyBox.locator, ['[class*="pdp-price"]']);
+    }
     const itemPriceMinor = parseSgdMinor(priceText);
 
     const retailerProductId = /-i(\d+)/.exec(finalUrl)?.[1] ?? null;
@@ -403,19 +573,44 @@ export class LazadaLiveObservationAdapter implements ObservationAdapter {
     const purchaseLimitMatch = PURCHASE_LIMIT_RE.exec(bodyText);
     const purchaseLimit = purchaseLimitMatch ? Number.parseInt(purchaseLimitMatch[1]!, 10) : null;
 
-    // Sold-out text anywhere in the body wins over a present button: Lazada keeps the (disabled)
-    // Add to Cart/Buy Now buttons in the DOM for an out-of-stock listing, so a button count alone
-    // is not proof of stock. Known cost: a "Sold out" badge on a recommended item elsewhere on the
-    // page reads as UNAVAILABLE for this listing (a missed restock, never a false candidate).
-
     const packagingCondition = classifyPackaging(bodyText);
 
-    const soldOutTextPresent = SOLD_OUT_RE.test(bodyText);
-    const addToCartPresent = (await this.page.getByRole('button', { name: /add to cart/i }).count()) > 0;
-    const buyNowPresent = (await this.page.getByRole('button', { name: /buy now/i }).count()) > 0;
-    let availability: Availability = 'UNKNOWN';
-    if (soldOutTextPresent) availability = 'UNAVAILABLE';
-    else if (addToCartPresent || buyNowPresent) availability = 'AVAILABLE';
+    // On a verified out-of-stock page, "Add to Cart"/"Buy Now" are absent (the only button under
+    // `#module_add_to_cart` is "Add to Wishlist") and a "Quantity: ... Out of stock" line sits in
+    // `#module_quantity-input`. Availability is read from *inside* the buy box only: a "Sold out"
+    // badge on a recommended item elsewhere on the page is ignored for availability and only
+    // recorded as a diagnostic (`soldOutTextOutsideBuyBox`).
+    const buyBoxSelector = buyBox.selector;
+
+    const quantityModule = buyBox.locator.locator('#module_quantity-input').first();
+    const quantityCount = await quantityModule.count();
+    const stockText =
+      quantityCount > 0
+        ? (await quantityModule.innerText().catch(() => '')).slice(0, 2000)
+        : (await buyBox.locator.innerText().catch(() => '')).slice(0, 2000);
+    const soldOutInBuyBox = SOLD_OUT_RE.test(stockText);
+    const soldOutTextOutsideBuyBox = SOLD_OUT_RE.test(bodyText) && !soldOutInBuyBox;
+
+    // Buttons are matched by accessible name only (never by class -- see file header), scoped to
+    // `#module_add_to_cart` when that module exists inside the buy box, else to the buy box itself.
+    const addToCartModule = buyBox.locator.locator('#module_add_to_cart').first();
+    const addToCartModuleCount = await addToCartModule.count();
+    const buttonRoot = addToCartModuleCount > 0 ? addToCartModule : buyBox.locator;
+    const addToCartLoc = buttonRoot.getByRole('button', { name: /add to cart/i });
+    const buyNowLoc = buttonRoot.getByRole('button', { name: /buy now/i });
+    const addToCartCount = await addToCartLoc.count();
+    const buyNowCount = await buyNowLoc.count();
+    const addToCartEnabled = addToCartCount > 0 && (await this.isButtonEnabled(addToCartLoc));
+    const buyNowEnabled = buyNowCount > 0 && (await this.isButtonEnabled(buyNowLoc));
+
+    // A present-but-disabled control proves only that it cannot be used right now, not why (stock,
+    // variant unselected, hydration still pending), so it stays UNKNOWN rather than UNAVAILABLE. The
+    // worker raises a candidate on either UNKNOWN->AVAILABLE or UNAVAILABLE->AVAILABLE, so the
+    // transition behaviour is identical; only the claim is honest.
+    let availability: Availability;
+    if (soldOutInBuyBox) availability = 'UNAVAILABLE';
+    else if (addToCartEnabled || buyNowEnabled) availability = 'AVAILABLE';
+    else availability = 'UNKNOWN';
 
     const offer: OfferedItem = {
       retailerProductId,
@@ -461,6 +656,10 @@ export class LazadaLiveObservationAdapter implements ObservationAdapter {
         availability,
         packagingCondition,
         bodyTextExcerpt,
+        buyBoxSelector,
+        soldOutTextOutsideBuyBox,
+        readiness,
+        readinessMs,
       },
       snapshotRef,
     });

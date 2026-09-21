@@ -232,6 +232,13 @@ interface ObservationRecordOut {
   observeMs: number | null;
   loadMs: number | null;
   parseMs: number | null;
+  /** Evidence.observedFields from the bounded buy-box readiness wait that replaced the old fixed 4 s
+   *  settle sleep (see docs/lazada-feasibility.md, 2026-09-21 note). Null on any evidence that predates
+   *  it or lacks the field for another reason -- never guessed. */
+  readiness: 'decisive' | 'timeout' | null;
+  readinessMs: number | null;
+  buyBoxSelector: string | null;
+  soldOutTextOutsideBuyBox: boolean | null;
   validationMs: number | null;
   interpretationMs: number | null;
   interpretationProvenance: Provenance | null;
@@ -256,9 +263,11 @@ function fmt(v: number | string | null): string {
 }
 
 function markdownTable(records: ObservationRecordOut[]): string {
-  const headers = ['#', 'sched->start(ms)', 'observe(ms)', 'load(ms)', 'parse(ms)', 'validate(ms)', 'interpret(ms)', 'interpret src', 'availability', 'accessControl', 'state'];
+  const headers = ['#', 'sched->start(ms)', 'observe(ms)', 'load(ms)', 'readiness', 'readiness(ms)', 'parse(ms)', 'validate(ms)', 'interpret(ms)', 'interpret src', 'availability', 'accessControl', 'state'];
   const rows = records.map((r) =>
-    [r.index, r.schedulerSlackMs, r.observeMs, r.loadMs, r.parseMs, r.validationMs, r.interpretationMs, r.interpretationSource, r.availability, r.accessControl, r.stateAfter].map((v) => fmt(v as number | string | null)),
+    [r.index, r.schedulerSlackMs, r.observeMs, r.loadMs, r.readiness, r.readinessMs, r.parseMs, r.validationMs, r.interpretationMs, r.interpretationSource, r.availability, r.accessControl, r.stateAfter].map((v) =>
+      fmt(v as number | string | null),
+    ),
   );
   const lines = [`| ${headers.join(' | ')} |`, `|${headers.map(() => ' --- ').join('|')}|`, ...rows.map((r) => `| ${r.join(' | ')} |`)];
   return lines.join('\n');
@@ -387,7 +396,12 @@ async function main(): Promise<void> {
           // One progress line per read on stderr so a supervisor can watch the run without the store.
           loggedReads = completedCount;
           const obsNow = store.getObservation(lastCompleted.payload.observationId as string);
-          console.error(`[read ${completedCount}/${reads}] ${lastCompleted.at} availability=${obsNow?.availability ?? 'n/a'} accessControl=${accessControl} error=${error ?? 'none'} state=${m.state}`);
+          const evidenceNow = obsNow ? store.getEvidence(obsNow.evidenceId) : null;
+          const readinessNow = (evidenceNow?.observedFields.readiness as string | undefined) ?? 'n/a';
+          const readinessMsNow = (evidenceNow?.observedFields.readinessMs as number | undefined) ?? 'n/a';
+          console.error(
+            `[read ${completedCount}/${reads}] ${lastCompleted.at} availability=${obsNow?.availability ?? 'n/a'} accessControl=${accessControl} error=${error ?? 'none'} state=${m.state} readiness=${readinessNow} readinessMs=${readinessMsNow}`,
+          );
         }
         if (accessControl !== 'none') {
           stoppedReason = 'access_control';
@@ -504,6 +518,10 @@ async function main(): Promise<void> {
       observeMs,
       loadMs: (evidence?.observedFields.loadMs as number | undefined) ?? null,
       parseMs: (evidence?.observedFields.parseMs as number | undefined) ?? null,
+      readiness: (evidence?.observedFields.readiness as 'decisive' | 'timeout' | undefined) ?? null,
+      readinessMs: (evidence?.observedFields.readinessMs as number | undefined) ?? null,
+      buyBoxSelector: (evidence?.observedFields.buyBoxSelector as string | undefined) ?? null,
+      soldOutTextOutsideBuyBox: (evidence?.observedFields.soldOutTextOutsideBuyBox as boolean | undefined) ?? null,
       validationMs,
       interpretationMs: interp?.ms ?? null,
       interpretationProvenance: interp?.provenance ?? null,
@@ -522,12 +540,14 @@ async function main(): Promise<void> {
   const observeMss = records.map((r) => r.observeMs).filter((v): v is number => v !== null);
   const interpretationMss = records.map((r) => r.interpretationMs).filter((v): v is number => v !== null);
   const validationMss = records.map((r) => r.validationMs).filter((v): v is number => v !== null);
+  const readinessMss = records.map((r) => r.readinessMs).filter((v): v is number => v !== null);
 
   const summary = {
     schedulerSlackMs: summarizeTimings(schedulerSlacks) satisfies TimingStats,
     observeMs: summarizeTimings(observeMss) satisfies TimingStats,
     interpretationMs: summarizeTimings(interpretationMss) satisfies TimingStats,
     validationMs: summarizeTimings(validationMss) satisfies TimingStats,
+    readinessMs: summarizeTimings(readinessMss) satisfies TimingStats,
     reactionFloorMs: reactionFloorMs({
       cadenceSeconds,
       observeMsP95: p95(observeMss),
