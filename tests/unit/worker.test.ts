@@ -365,6 +365,53 @@ describe('scheduling and observation cadence (A01, A03, A04, A05, A12)', () => {
     expect(h.eventTypes().filter((t) => t === 'signal.imported')).toHaveLength(1);
     expect(h.worker.missionView(h.missionId)!.latency.signalReceivedAt).not.toBeNull();
   });
+
+  it('Defect 1: a denied origin-limiter attempt is deferred to the limiter\'s own window, not the full cadence', async () => {
+    const h = harness({
+      script: [soldOutObs(), soldOutObs()],
+      // A 120s baseline (as in the live run) with a 1/min origin allowance: an imported signal 5s
+      // after the first read must not be pushed out by a full 120s cadence.
+      policy: { ...DEMO_MONITOR_POLICY, baselineIntervalSeconds: 120, priorityIntervalSeconds: 120, maxObservationsPerOriginPerMinute: 1 },
+    });
+
+    await h.worker.tick(); // t0: consumes the origin's one-per-minute allowance
+    expect(h.adapter.calls).toHaveLength(1);
+
+    h.clock.advanceMs(5000); // t0+5s
+    h.worker.importSignal({ missionId: h.missionId, kind: 'restock_alert', dedupeKey: 'alert-defer', evidenceId: null, receivedAt: h.nowIso() });
+    expect(h.mission().nextCheckAt).toBe(h.nowIso());
+
+    await h.tickAfter(1000); // t0+6s: due, but the origin limiter still denies it
+    expect(h.adapter.calls).toHaveLength(1); // no adapter call was made
+    expect(h.mission().consecutiveFailures).toBe(0); // a denial is not an observation failure
+    expect(h.eventTypes()).toContain('observation.deferred');
+    const deferred = h.timeline().find((e) => e.type === 'observation.deferred')!;
+    expect(deferred.payload.reason).toBe('origin_rate_limit');
+    expect(deferred.payload.origin).toBe(h.adapter.origin);
+    expect(deferred.payload.retryAt).toBe('2026-09-18T00:01:00.000Z'); // t0 + 60s
+    expect(h.mission().nextCheckAt).toBe('2026-09-18T00:01:00.000Z'); // t0 + 60s, not t0 + the 120s cadence
+    expect(h.worker.health().cadenceLabels).toContain('Deferred: origin limit');
+
+    await h.tickAfter(55_000); // t0+61s: the limiter's own minute has now elapsed
+    expect(h.adapter.calls).toHaveLength(2);
+  });
+
+  it('Defect 1: with headroom in the origin limiter, an imported signal is observed on the very next tick', async () => {
+    const h = harness({
+      script: [soldOutObs(), soldOutObs()],
+      policy: { ...DEMO_MONITOR_POLICY, baselineIntervalSeconds: 120, priorityIntervalSeconds: 120, maxObservationsPerOriginPerMinute: 2 },
+    });
+
+    await h.worker.tick(); // t0
+    expect(h.adapter.calls).toHaveLength(1);
+
+    h.clock.advanceMs(5000); // t0+5s
+    h.worker.importSignal({ missionId: h.missionId, kind: 'restock_alert', dedupeKey: 'alert-room', evidenceId: null, receivedAt: h.nowIso() });
+
+    await h.worker.tick(); // same instant: the limiter still has room for a second call
+    expect(h.adapter.calls).toHaveLength(2);
+    expect(h.eventTypes()).not.toContain('observation.deferred');
+  });
 });
 
 // ---------------------------------------------------------------------

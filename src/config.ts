@@ -40,8 +40,13 @@ const intWithDefault = (d: number) =>
 
 const EnvSchema = z.object({
   BTS_MODE: z.enum(['demo', 'lazada_assist']).default('demo'),
+  BTS_MODEL_PROVIDER: z.enum(['anthropic', 'gemini']).default('anthropic'),
   ANTHROPIC_MODEL: z.string().default('claude-opus-5'),
   ANTHROPIC_API_KEY: z.string().optional().transform((s) => (s && s.trim() ? s.trim() : null)),
+  GEMINI_MODEL: z.string().default('gemini-3.8-flash'),
+  GEMINI_API_KEY: z.string().optional().transform((s) => (s && s.trim() ? s.trim() : null)),
+  /** 'low' is the speed choice for the fast alternative path; 'minimal' is rejected by gemini-3.8-flash. */
+  BTS_GEMINI_THINKING_LEVEL: z.enum(['low', 'medium', 'high']).default('low'),
   BTS_AGENT_EFFORT: z.enum(['low', 'medium', 'high']).default('high'),
   BTS_TIMEZONE: z.literal('Asia/Singapore').default('Asia/Singapore'),
   BTS_LIVE_OBSERVE_ENABLED: bool,
@@ -60,8 +65,14 @@ const EnvSchema = z.object({
 
 export interface AppConfig {
   mode: Mode;
+  /** The selected provider's model id (shown in the UI band and /api/health). */
   model: string;
+  /** Kept for backward compatibility: always the Anthropic key, regardless of modelProvider. */
   apiKey: string | null;
+  modelProvider: 'anthropic' | 'gemini';
+  geminiApiKey: string | null;
+  geminiModel: string;
+  geminiThinkingLevel: 'low' | 'medium' | 'high';
   effort: 'low' | 'medium' | 'high';
   timezone: 'Asia/Singapore';
   liveObserveEnabled: boolean;
@@ -80,7 +91,7 @@ export interface AppConfig {
   /** The only loopback origin the demo executor may touch. */
   demoStoreOrigin: string;
   demoAdminOrigin: string;
-  /** 'live' when a key exists; otherwise offline replay is the only model path and is labelled as such. */
+  /** 'live' when the selected provider's key exists; otherwise offline replay is the only model path and is labelled as such. */
   modelPath: 'live' | 'offline_replay';
 }
 
@@ -100,10 +111,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { dotenv?
   });
   const v = validateMonitorPolicy(policy);
   if (!v.ok) throw new Error(`MonitorPolicy rejected: ${v.error}`);
+  const selectedKey = e.BTS_MODEL_PROVIDER === 'gemini' ? e.GEMINI_API_KEY : e.ANTHROPIC_API_KEY;
   return {
     mode: e.BTS_MODE,
-    model: e.ANTHROPIC_MODEL,
+    model: e.BTS_MODEL_PROVIDER === 'gemini' ? e.GEMINI_MODEL : e.ANTHROPIC_MODEL,
     apiKey: e.ANTHROPIC_API_KEY,
+    modelProvider: e.BTS_MODEL_PROVIDER,
+    geminiApiKey: e.GEMINI_API_KEY,
+    geminiModel: e.GEMINI_MODEL,
+    geminiThinkingLevel: e.BTS_GEMINI_THINKING_LEVEL,
     effort: e.BTS_AGENT_EFFORT,
     timezone: e.BTS_TIMEZONE,
     liveObserveEnabled: e.BTS_LIVE_OBSERVE_ENABLED,
@@ -120,6 +136,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { dotenv?
     uiOrigins: [`http://127.0.0.1:${e.BTS_UI_PORT}`, `http://localhost:${e.BTS_UI_PORT}`],
     demoStoreOrigin: `http://127.0.0.1:${e.BTS_DEMO_STORE_PORT}`,
     demoAdminOrigin: `http://127.0.0.1:${e.BTS_DEMO_ADMIN_PORT}`,
-    modelPath: e.ANTHROPIC_API_KEY ? 'live' : 'offline_replay',
+    modelPath: selectedKey ? 'live' : 'offline_replay',
   };
 }

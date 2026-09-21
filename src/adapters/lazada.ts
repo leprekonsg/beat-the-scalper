@@ -18,6 +18,14 @@ export interface LazadaObservationAdapterDeps {
   liveObserveEnabled: boolean;
   /** Origin this adapter would touch; used only for shared per-origin rate limiting bookkeeping. */
   origin?: string;
+  /**
+   * Optional validated adapter to delegate to once the feasibility gate passes (e.g.
+   * LazadaLiveObservationAdapter from a supervised script). Production wiring (src/server/wiring.ts)
+   * passes nothing, so this cannot change default behaviour: the gate still blocks by default, and
+   * when it is recorded as passed with no `live` adapter supplied, this still throws
+   * NotImplementedError rather than fabricate a result.
+   */
+  live?: ObservationAdapter;
 }
 
 export const BLOCKED_MESSAGE = 'Live Lazada observation is blocked: feasibility gate not passed (docs/lazada-feasibility.md)';
@@ -68,8 +76,12 @@ export class LazadaObservationAdapter implements ObservationAdapter {
         error: BLOCKED_MESSAGE,
       };
     }
-    // Gate recorded as passed, but no validated adapter exists in this build. Fail loudly rather than
+    // Gate recorded as passed: delegate to the validated adapter when the caller supplied one
+    // (supervised scripts only; production wiring never does). Otherwise fail loudly rather than
     // silently returning a fabricated observation.
+    if (this.deps.live) {
+      return this.deps.live.observeTarget(req);
+    }
     throw new NotImplementedError('validated Lazada observation adapter not registered');
   }
 }

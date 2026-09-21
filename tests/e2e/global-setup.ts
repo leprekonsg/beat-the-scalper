@@ -61,6 +61,9 @@ export default async function globalSetup(): Promise<void> {
     // Offline replay only. config.ts's .env loader never overwrites an already-defined variable, so an
     // empty string here wins over the developer's .env key and forces modelPath=offline_replay.
     ANTHROPIC_API_KEY: '',
+    // Both provider keys are blanked and the provider is pinned, so the suite is offline whatever BTS_MODEL_PROVIDER the developer's environment sets.
+    GEMINI_API_KEY: '',
+    BTS_MODEL_PROVIDER: 'anthropic',
   };
 
   const children: ChildProcess[] = [];
@@ -94,10 +97,12 @@ export default async function globalSetup(): Promise<void> {
   const health = (await (await fetch(`${API_ORIGIN}/api/health`)).json()) as {
     mode: string;
     modelPath: string;
+    modelProvider: string;
     capabilities: Record<string, string>;
     health: { clock: { kind: string; now: string } };
   };
   if (health.health.clock.kind !== 'virtual') throw new Error('API did not start with a virtual clock; BTS_VIRTUAL_CLOCK_START was not honoured.');
   if (health.capabilities.demoBrowser !== 'ready') throw new Error(`Demo browser capability is "${health.capabilities.demoBrowser}"; the suite cannot observe the storefront. Run "npx playwright install chromium".`);
-  console.log(`[e2e] stack up: mode=${health.mode} modelPath=${health.modelPath} clock=${health.health.clock.now} dataDir=${dataDir}`);
+  if (health.modelPath !== 'offline_replay') throw new Error(`API started with modelPath="${health.modelPath}"; the e2e suite must run on the labelled offline-replay path.`);
+  console.log(`[e2e] stack up: mode=${health.mode} modelProvider=${health.modelProvider} modelPath=${health.modelPath} clock=${health.health.clock.now} dataDir=${dataDir}`);
 }

@@ -27,16 +27,12 @@ import type {
   ToolUseBlock,
 } from '@anthropic-ai/sdk/resources/messages/messages';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import type { Clock } from '../domain/time.ts';
 import { SystemClock } from '../domain/time.ts';
 import type { Provenance } from '../domain/types.ts';
 import type { RestrictedBrowserExecutor } from './browserExecutor.ts';
-
-const moduleDir = dirname(fileURLToPath(import.meta.url));
+import { defaultReplayDir, describeError, runOfflineReplay, zeroUsage } from './replay.ts';
 
 const MAX_TOKENS = 16000;
 
@@ -104,18 +100,6 @@ export interface TaskUsage {
    * Null when the model is not in the pricing table.
    */
   estimatedCostUsd: number | null;
-}
-
-function zeroUsage(): TaskUsage {
-  return {
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadInputTokens: 0,
-    cacheCreationInputTokens: 0,
-    toolCalls: 0,
-    elapsedMs: 0,
-    estimatedCostUsd: null,
-  };
 }
 
 function estimateCostUsd(model: string, inputTokens: number, outputTokens: number): number | null {
@@ -199,10 +183,6 @@ export function verifyHistoryPrefix(messages: MessageParam[], hashes: string[]):
   return true;
 }
 
-function defaultReplayDir(): string {
-  return resolve(moduleDir, '../../fixtures/replay');
-}
-
 function systemBlocks(system: string): TextBlockParam[] {
   return [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }];
 }
@@ -239,11 +219,6 @@ function isRetryableApiError(err: unknown): boolean {
   return false;
 }
 
-function describeApiError(err: unknown): string {
-  if (err instanceof Error) return `${err.name}: ${err.message}`;
-  return String(err);
-}
-
 function forwardThinkingUpdates(response: Message, onUpdate: (text: string) => void): void {
   for (const block of response.content) {
     if (block.type === 'thinking') {
@@ -278,39 +253,6 @@ export function createFableClient(cfg: FableClientConfig): FableClient {
       return runLiveTask(anthropic, cfg, clock, task);
     },
   };
-}
-
-async function runOfflineReplay<T>(task: TaskSpec<T>, replayDir: string): Promise<TaskResult<T>> {
-  const usage = zeroUsage();
-  const file = resolve(replayDir, `${task.name}.json`);
-  if (!existsSync(file)) {
-    return { ok: false, reason: 'api_error', detail: `No offline replay fixture for task "${task.name}" at ${file}`, usage, provenance: 'offline_replay' };
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(file, 'utf8'));
-  } catch (err) {
-    return { ok: false, reason: 'api_error', detail: `Offline replay fixture ${file} is not valid JSON: ${describeApiError(err)}`, usage, provenance: 'offline_replay' };
-  }
-  const fixture = parsed as { label?: string; output?: unknown; usage?: Partial<TaskUsage> };
-  const label = fixture.label ?? 'Offline replay fixture - not a live Fable run';
-  if (fixture.usage) Object.assign(usage, fixture.usage);
-  const payload = fixture.output ?? parsed;
-
-  if (task.outputSchema) {
-    const result = task.outputSchema.safeParse(payload);
-    if (!result.success) {
-      return {
-        ok: false,
-        reason: 'invalid_output',
-        detail: `Offline replay fixture ${file} failed schema validation: ${result.error.message}`,
-        usage,
-        provenance: 'offline_replay',
-      };
-    }
-    return { ok: true, output: result.data, text: JSON.stringify(result.data), usage, provenance: 'offline_replay', stopReason: 'end_turn', model: null, label };
-  }
-  return { ok: true, output: payload as T, text: JSON.stringify(payload), usage, provenance: 'offline_replay', stopReason: 'end_turn', model: null, label };
 }
 
 async function dispatchToolUses(blocks: ToolUseBlock[], task: TaskSpec<unknown>): Promise<ToolResultBlockParam[]> {
@@ -400,7 +342,7 @@ async function runLiveTask<T>(client: Anthropic, cfg: FableClientConfig, clock: 
         retries += 1;
         continue;
       }
-      return { ok: false, reason: 'api_error', detail: describeApiError(err), usage: finalizeUsage(), provenance: 'blocked' };
+      return { ok: false, reason: 'api_error', detail: describeError(err), usage: finalizeUsage(), provenance: 'blocked' };
     }
 
     usage.inputTokens += response.usage.input_tokens;
@@ -454,7 +396,7 @@ async function runLiveTask<T>(client: Anthropic, cfg: FableClientConfig, clock: 
       try {
         toolResults = await dispatchToolUses(toolUseBlocks, task as TaskSpec<unknown>);
       } catch (err) {
-        return { ok: false, reason: 'api_error', detail: `Tool dispatch failed: ${describeApiError(err)}`, usage: finalizeUsage(), provenance: 'blocked' };
+        return { ok: false, reason: 'api_error', detail: `Tool dispatch failed: ${describeError(err)}`, usage: finalizeUsage(), provenance: 'blocked' };
       }
       messages.push({ role: 'user', content: toolResults });
       continue;

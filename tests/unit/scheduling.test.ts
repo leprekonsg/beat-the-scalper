@@ -166,4 +166,34 @@ describe('backoff, downtime recovery, and per-origin limits', () => {
     const limiter = new OriginRateLimiter(null);
     expect([1, 2, 3, 4, 5].every((n) => limiter.tryAcquire('127.0.0.1:4310', n))).toBe(true);
   });
+
+  describe('OriginRateLimiter.nextAllowedAt', () => {
+    it('a null policy is always allowed now', () => {
+      const limiter = new OriginRateLimiter(null);
+      expect(limiter.nextAllowedAt('lazada.sg', 999_999)).toBe(999_999);
+    });
+
+    it('an empty window (no calls yet) is allowed now', () => {
+      const limiter = new OriginRateLimiter(1);
+      expect(limiter.nextAllowedAt('lazada.sg', 5_000)).toBe(5_000);
+    });
+
+    it('a full window is allowed once the oldest stamp falls out of it, 60s later', () => {
+      const limiter = new OriginRateLimiter(1);
+      const t0 = 10_000;
+      expect(limiter.tryAcquire('lazada.sg', t0)).toBe(true);
+      expect(limiter.nextAllowedAt('lazada.sg', t0 + 5_000)).toBe(t0 + 60_000);
+      // A read-only query: it does not itself consume the allowance.
+      expect(limiter.tryAcquire('lazada.sg', t0 + 5_000)).toBe(false);
+    });
+
+    it('is allowed again once the window has room, even without an intervening tryAcquire', () => {
+      const limiter = new OriginRateLimiter(2);
+      const t0 = 0;
+      expect(limiter.tryAcquire('lazada.sg', t0)).toBe(true);
+      expect(limiter.tryAcquire('lazada.sg', t0 + 1_000)).toBe(true);
+      expect(limiter.nextAllowedAt('lazada.sg', t0 + 2_000)).toBe(t0 + 60_000); // oldest of the two stamps
+      expect(limiter.nextAllowedAt('lazada.sg', t0 + 60_001)).toBe(t0 + 60_001); // that stamp has aged out
+    });
+  });
 });

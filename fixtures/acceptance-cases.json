@@ -16,7 +16,7 @@
           "tests/unit/time.test.ts",
           "tests/unit/worker.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -29,7 +29,7 @@
           "tests/unit/announcement.test.ts",
           "tests/unit/scheduling.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -45,7 +45,7 @@
           "tests/unit/time.test.ts",
           "tests/unit/worker.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -59,7 +59,7 @@
           "tests/unit/time.test.ts",
           "tests/unit/worker.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -74,7 +74,7 @@
           "tests/unit/policy.test.ts",
           "tests/unit/worker.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -86,9 +86,10 @@
         "tests": [
           "tests/e2e/dashboard.spec.ts",
           "tests/unit/agent-client.test.ts",
-          "tests/unit/announcement.test.ts"
+          "tests/unit/announcement.test.ts",
+          "tests/unit/gemini-client.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)",
+        "run": "npx vitest run (2026-09-19, all tests passed)",
         "model": "live claude-opus-5 and claude-fable-5-1 via scripts/eval-fable.ts (PASS, see docs/evaluation-results.md)"
       }
     },
@@ -101,7 +102,7 @@
         "tests": [
           "tests/unit/policy.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -113,7 +114,7 @@
         "tests": [
           "tests/unit/policy.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -127,7 +128,7 @@
           "tests/unit/policy.test.ts",
           "tests/unit/worker.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)",
+        "run": "npx vitest run (2026-09-19, all tests passed)",
         "model": "live claude-opus-5 and claude-fable-5-1 via scripts/eval-fable.ts (PASS, see docs/evaluation-results.md)"
       }
     },
@@ -142,7 +143,7 @@
           "tests/unit/policy.test.ts",
           "tests/unit/worker.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -158,7 +159,7 @@
           "tests/unit/policy.test.ts",
           "tests/unit/worker.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -173,7 +174,7 @@
           "tests/unit/storage.test.ts",
           "tests/unit/worker.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -187,7 +188,7 @@
           "tests/unit/storage.test.ts",
           "tests/unit/worker.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -203,7 +204,7 @@
           "tests/unit/policy.test.ts",
           "tests/unit/worker.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -218,7 +219,7 @@
           "tests/unit/browserExecutor.test.ts",
           "tests/unit/worker.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -236,7 +237,7 @@
           "tests/unit/scheduling.test.ts",
           "tests/unit/worker.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -250,7 +251,7 @@
           "tests/unit/browserExecutor.test.ts",
           "tests/unit/worker.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -263,7 +264,7 @@
           "tests/unit/browserExecutor.test.ts",
           "tests/unit/worker.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -279,7 +280,7 @@
           "tests/unit/storage.test.ts",
           "tests/unit/worker.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -293,7 +294,7 @@
           "tests/integration/demoStore.http.test.ts",
           "tests/unit/worker.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -306,7 +307,7 @@
           "tests/unit/storage.test.ts",
           "tests/unit/worker.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -322,7 +323,7 @@
           "tests/unit/storage.test.ts",
           "tests/unit/worker.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -336,7 +337,7 @@
           "tests/unit/time.test.ts",
           "tests/unit/worker.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -348,9 +349,11 @@
         "tests": [
           "tests/unit/agent-client.test.ts",
           "tests/unit/config.test.ts",
+          "tests/unit/gemini-client.test.ts",
+          "tests/unit/model-client.test.ts",
           "tests/unit/worker.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -362,7 +365,7 @@
         "tests": [
           "tests/unit/agent-client.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     },
     {
@@ -376,7 +379,7 @@
           "tests/unit/browserExecutor.test.ts",
           "tests/unit/config.test.ts"
         ],
-        "run": "npx vitest run (2026-09-18, all tests passed)"
+        "run": "npx vitest run (2026-09-19, all tests passed)"
       }
     }
   ]

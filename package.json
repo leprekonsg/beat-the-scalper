@@ -19,15 +19,21 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:live:lazada": "playwright test -c playwright.live.config.ts",
     "smoke:fable": "tsx scripts/smoke-fable.ts",
+    "smoke:gemini": "tsx scripts/smoke-fable.ts --provider gemini",
     "eval:fable": "tsx scripts/eval-fable.ts",
-    "demo:run": "tsx scripts/run-demo-flows.ts"
+    "eval:gemini": "tsx scripts/eval-fable.ts --provider gemini",
+    "demo:run": "tsx scripts/run-demo-flows.ts",
+    "lazada:gemini-observe": "tsx scripts/lazada-gemini-observe.ts",
+    "lazada:live-reaction": "tsx scripts/lazada-live-reaction.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.125.0",
     "@fontsource-variable/source-code-pro": "5.3.0",
     "@fontsource-variable/source-sans-3": "5.3.0",
     "@fontsource/marcellus": "5.3.0",
+    "@google/genai": "2.22.0",
     "playwright": "1.63.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",

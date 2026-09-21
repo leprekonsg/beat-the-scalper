@@ -51,6 +51,40 @@ describe('loadConfig', () => {
     expect(loadConfig({ ANTHROPIC_API_KEY: key }, NO_DOTENV).modelPath).toBe(modelPath);
   });
 
+  it('A24: the default provider is anthropic', () => {
+    expect(loadConfig({}, NO_DOTENV).modelProvider).toBe('anthropic');
+  });
+
+  it('A24: provider gemini with GEMINI_API_KEY set selects the live gemini path', () => {
+    const cfg = loadConfig({ BTS_MODEL_PROVIDER: 'gemini', GEMINI_API_KEY: 'test-gemini-key' }, NO_DOTENV);
+    expect(cfg.modelProvider).toBe('gemini');
+    expect(cfg.modelPath).toBe('live');
+    expect(cfg.model).toBe('gemini-3.8-flash');
+    expect(cfg.geminiThinkingLevel).toBe('low');
+  });
+
+  it('A24: provider gemini with only ANTHROPIC_API_KEY set stays on offline replay (the other provider key never turns the selected path live)', () => {
+    const cfg = loadConfig({ BTS_MODEL_PROVIDER: 'gemini', ANTHROPIC_API_KEY: 'sk-ant-test-key' }, NO_DOTENV);
+    expect(cfg.geminiApiKey).toBeNull();
+    expect(cfg.modelPath).toBe('offline_replay');
+  });
+
+  it('A24: provider anthropic with only GEMINI_API_KEY set stays on offline replay', () => {
+    const cfg = loadConfig({ BTS_MODEL_PROVIDER: 'anthropic', GEMINI_API_KEY: 'test-gemini-key' }, NO_DOTENV);
+    expect(cfg.modelPath).toBe('offline_replay');
+  });
+
+  it('honours GEMINI_MODEL and BTS_GEMINI_THINKING_LEVEL', () => {
+    const cfg = loadConfig({ BTS_MODEL_PROVIDER: 'gemini', GEMINI_MODEL: 'gemini-3.8-flash-preview', BTS_GEMINI_THINKING_LEVEL: 'high' }, NO_DOTENV);
+    expect(cfg.geminiModel).toBe('gemini-3.8-flash-preview');
+    expect(cfg.model).toBe('gemini-3.8-flash-preview');
+    expect(cfg.geminiThinkingLevel).toBe('high');
+  });
+
+  it('A16: BTS_GEMINI_THINKING_LEVEL=minimal is refused (gemini-3.8-flash rejects it)', () => {
+    expect(() => loadConfig({ BTS_MODEL_PROVIDER: 'gemini', BTS_GEMINI_THINKING_LEVEL: 'minimal' }, NO_DOTENV)).toThrow(/Invalid configuration/);
+  });
+
   it('A26: demo and live origins stay separate and the demo store is the only permitted loopback target', () => {
     const cfg = loadConfig({ BTS_DEMO_STORE_PORT: '4310', BTS_DEMO_ADMIN_PORT: '4311', BTS_UI_PORT: '5173' }, NO_DOTENV);
     expect(cfg.demoStoreOrigin).toBe('http://127.0.0.1:4310');

@@ -7,6 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from '../config.ts';
+import { describeModelClient } from '../agent/modelClient.ts';
 import { Store } from '../storage/db.ts';
 import { SystemClock, VirtualClock } from '../domain/time.ts';
 import { createApiHandler } from './api.ts';
@@ -79,12 +80,14 @@ function printBanner(
   capabilities: { extraction: string; interpreter: string; demoBrowser: string },
   virtualClock: boolean,
 ): void {
+  const modelDescription = describeModelClient(config);
+  const missingKeyName = config.modelProvider === 'gemini' ? 'GEMINI_API_KEY' : 'ANTHROPIC_API_KEY';
   const lines = [
     '',
     '=== BTS - Beat The Scalper ===',
     `Mode:           ${config.mode}`,
-    `Model path:     ${config.modelPath}${config.modelPath === 'offline_replay' ? ' (no ANTHROPIC_API_KEY; extraction/interpreter run in labelled offline replay)' : ''}`,
-    `Model:          ${config.model} (effort ${config.effort})`,
+    `Model path:     ${config.modelPath}${config.modelPath === 'offline_replay' ? ` (no ${missingKeyName}; extraction/interpreter run in labelled offline replay)` : ''}`,
+    `Model:          ${config.modelProvider}/${modelDescription.model} (${modelDescription.detail})`,
     `Capabilities:   extraction=${capabilities.extraction} interpreter=${capabilities.interpreter} demoBrowser=${capabilities.demoBrowser}`,
     `Clock:          ${virtualClock ? 'VIRTUAL (accelerated demo clock, see BTS_VIRTUAL_CLOCK_START)' : 'system'}`,
     `API URL:        http://127.0.0.1:${config.apiPort}`,

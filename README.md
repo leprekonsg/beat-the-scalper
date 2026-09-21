@@ -24,6 +24,7 @@ One screen, no chat. The mission sits in the centre pocket with its state, prove
 - npm 11. Dependencies are pinned exactly; `npm ci` respects the lockfile.
 - Playwright Chromium: `npx playwright install chromium` once.
 - Optional: `ANTHROPIC_API_KEY` in `.env` for live model interpretation. Without it the model path runs as labelled `offline_replay` from `fixtures/replay/*.json`.
+- Optional: `GEMINI_API_KEY` in `.env` to use the faster `gemini-3.8-flash` path (`BTS_MODEL_PROVIDER=gemini`) instead of the Anthropic default.
 
 ## Setup
 
@@ -63,10 +64,15 @@ Accelerated demo clock: set `BTS_VIRTUAL_CLOCK_START=2026-09-18T04:58:00.000Z` (
 | `npm run test:e2e` | Playwright browser tests; boots its own stack on 4300/4310/4311/5173 with the model key blanked (offline replay) and refuses to start if those ports are busy |
 | `python scripts/acceptance-status.py [--e2e]` | Stamps `fixtures/acceptance-cases.json` from executed test titles; run after the suites pass |
 | `npm run demo:run` | Five measured demo runs plus fault and interruption cases; writes `docs/evaluation-results.json` and appends to `docs/evaluation-results.md` |
-| `npm run smoke:fable` | Phase 0 model smoke test (live if a key exists, else exits 2) |
-| `npm run eval:fable` | Extraction evaluation across effort levels; appends to a local `docs/evaluation-results.jsonl` |
+| `npm run smoke:fable` | Phase 0 model smoke test on the Anthropic path (live if `ANTHROPIC_API_KEY` exists, else exits 2) |
+| `npm run smoke:gemini` | Same smoke test on the Gemini path (live if `GEMINI_API_KEY` exists, else exits 2) |
+| `npm run eval:fable` | Extraction evaluation across effort levels on the Anthropic path; appends to a local `docs/evaluation-results.jsonl` |
+| `npm run eval:gemini` | Same evaluation on the Gemini path, across thinking levels |
 | `npx tsx scripts/capture-ui.ts` | Boots the stack, arms a mission, screenshots the dashboard into a local capture directory |
 | `npx tsx scripts/lazada-probe.ts --url=<lazada url> --approved "<note>"` | One supervised read-only Lazada observation. Refuses to run without an approval note |
+| `npm run lazada:gemini-observe -- --url=<lazada url> --approved "<note>"` | Supervised, observe-only Gemini computer-use session on one Lazada page: Gemini may scroll/screenshot only, never login/cart/buy. Requires `GEMINI_API_KEY` and an approval note; no offline replay |
+| `npm run test:live:lazada` | Gated live Playwright suite for the same observe-only Gemini session, plus a single-observation run of the real Worker/scheduler against a live Lazada page. Requires `GEMINI_API_KEY` (or `ANTHROPIC_API_KEY` under `BTS_MODEL_PROVIDER=anthropic`), `BTS_LIVE_LAZADA_URL`, and `BTS_LIVE_LAZADA_APPROVED`; skips itself otherwise. Never runs under `npm run test:e2e` |
+| `npm run lazada:live-reaction -- --url=<lazada url> --approved "<note>" --cadence-seconds=<int,min60> --reads=<int 1..30> [--signal-at-read=<n>] [--max-per-minute=<1..6>] [--provider=gemini|anthropic|none]` | Supervised, observe-only reaction-speed measurement under the REAL Worker and scheduler (no demo store): reads/validates/interprets a live Lazada page on a fixed cadence and reports scheduler slack, observe/interpretation/validation latency, and a reaction-floor estimate. Mission authority is `observe`; the preparation executor always refuses and the script asserts it was never called. Requires an approval note; refuses a live model provider with no key (no offline replay for a reaction measurement) |
 
 ## Layout
 
@@ -93,6 +99,14 @@ Scope, audiences, and brand commitments are in [PRODUCT.md](PRODUCT.md); the des
 - `demo`: full simulated purchase on the owned storefront through a real Chromium. Quantity is fixed at 1, the seller must match, packaging conditions are surfaced before any action, and the delivered total shows `Unknown` until delivery is known.
 - `lazada_assist`: missions can be drafted and armed; live observation stays `Blocked` until [docs/lazada-feasibility.md](docs/lazada-feasibility.md) records a passed continuous-observation test and the user sets a reviewed cadence. The live path ends at human handoff. Every live access needs explicit approval first.
 - The model interprets evidence only. The deterministic controller owns observation, policy, and execution; model output can resolve an unknown into a concrete condition that code re-checks, never authorise a purchase.
+
+### Model providers
+
+`BTS_MODEL_PROVIDER` selects the live model path: `anthropic` (default, `claude-opus-5`) or `gemini` (`gemini-3.8-flash`, a faster/cheaper alternative, thinking level `low` by default). Both implement the same `FableClient` contract, so `extractAnnouncement` and `FableOfferInterpreter` behave identically either way, and both fall back to the same labelled `offline_replay` fixtures when their provider's key is absent. The Gemini path only supports single-turn, tool-free requests: it does not run the restricted browser toolset, so any task carrying `tools` or a `browserExecutor` (the gated `lazada_observe` assessment path) is refused before any network call with a message to switch back to `BTS_MODEL_PROVIDER=anthropic`. Gemini interactions are never stored server-side (`store: false` on every call).
+
+The Gemini path additionally offers a supervised, observe-only computer-use observation (`scripts/lazada-gemini-observe.ts`) that lets Gemini scroll and screenshot a live Lazada page to produce a structured report. Click/type/navigate and every other interactive predefined function are excluded from the served tool and rejected again in code if the model attempts one anyway; it is not wired into the worker.
+
+Reaction speed is no longer measured against the demo store: it is measured live against Lazada, under the real `Worker` and real scheduler, in a supervised, approval-gated, observe-only harness (`npm run lazada:live-reaction`, `tests/live/lazada-reaction.spec.ts`); the file-based live gate above is unchanged by this -- `BTS_LIVE_OBSERVE_ENABLED`/`BTS_LIVE_PREPARE_ENABLED` stay `false` by default and these harnesses set the feasibility pass in their own throwaway in-memory store only.
 
 ## Provenance labels
 

@@ -1,6 +1,6 @@
 /**
  * Confines integration with concurrently-developed modules (worker/worker.ts, adapters/demoStore.ts,
- * agent/client.ts, agent/extract.ts, agent/assess.ts) to one file. Every dynamic import is wrapped so a
+ * agent/modelClient.ts, agent/extract.ts, agent/assess.ts) to one file. Every dynamic import is wrapped so a
  * missing or mismatched module degrades a reported capability instead of crashing the server
  * (BTS_FABLE_BUILD_PLAN.md Section 12: "reversible local development ... must not stop the independent
  * demo and test work").
@@ -12,8 +12,9 @@
  *  - `adapters/demoStore.ts` exports `createDemoBrowser({ storeOrigin, headless, profileDir, dataDir })
  *    -> Promise<{ page, close }>`, `DemoStoreAdapter`, and `DemoStoreExecutor`, both constructed as
  *    `new X({ page, storeOrigin, now, onEvidence, dataDir })`.
- *  - `agent/client.ts` exports `createFableClient({ apiKey, model, effort, maxToolCalls, maxSeconds,
- *    showModelUpdates })`.
+ *  - `agent/modelClient.ts` exports `createModelClient(config: AppConfig)`, which itself picks
+ *    `agent/client.ts`'s `createFableClient` (Anthropic) or `agent/geminiClient.ts`'s
+ *    `createGeminiClient` (Gemini) from `config.modelProvider`.
  *  - `agent/extract.ts` exports an async `extractAnnouncement(args)` returning `{ extraction, usage }`
  *    (or the extraction object directly; both shapes are accepted defensively below).
  *  - `agent/assess.ts` exports a `FableOfferInterpreter` class constructed as `new FableOfferInterpreter({
@@ -303,21 +304,14 @@ export async function buildWiring(opts: { store: Store; clock: Clock; config: Ap
 
   let fableClient: unknown = null;
   try {
-    const mod = await dynamicImport<{ createFableClient?: (args: unknown) => unknown }>('../agent/client.ts');
-    if (typeof mod.createFableClient === 'function') {
-      fableClient = mod.createFableClient({
-        apiKey: config.apiKey,
-        model: config.model,
-        effort: config.effort,
-        maxToolCalls: config.agentMaxToolCalls,
-        maxSeconds: config.agentMaxSeconds,
-        showModelUpdates: config.showModelUpdates,
-      });
+    const mod = await dynamicImport<{ createModelClient?: (config: AppConfig) => unknown }>('../agent/modelClient.ts');
+    if (typeof mod.createModelClient === 'function') {
+      fableClient = mod.createModelClient(config);
     } else {
-      warnings.push('agent/client.ts loaded but does not export createFableClient');
+      warnings.push('agent/modelClient.ts loaded but does not export createModelClient');
     }
   } catch (err) {
-    warnings.push(`agent/client.ts unavailable: ${errMsg(err)}`);
+    warnings.push(`agent/modelClient.ts unavailable: ${errMsg(err)}`);
   }
 
   let extractAnnouncementFn: ExtractAnnouncementFn | null = null;

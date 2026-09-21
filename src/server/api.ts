@@ -252,6 +252,7 @@ function getHealth(res: ServerResponse, deps: ApiDeps): void {
     health: deps.worker.health(),
     mode: deps.config.mode,
     modelPath: deps.config.modelPath,
+    modelProvider: deps.config.modelProvider,
     model: deps.config.model,
     effort: deps.config.effort,
     monitorPolicy: deps.config.monitorPolicy,

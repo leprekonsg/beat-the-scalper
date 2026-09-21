@@ -146,4 +146,16 @@ export class OriginRateLimiter {
     this.stamps.set(origin, list);
     return true;
   }
+
+  /**
+   * When a call for `origin` would next be allowed, without recording one. `nowMs` when a call would
+   * be allowed right now (no policy, or the window has room); otherwise the instant the oldest stamp
+   * in the current 60s window falls out of it (`oldestStampInWindow + 60_000`).
+   */
+  nextAllowedAt(origin: string, nowMs: number): number {
+    if (this.perMinute === null) return nowMs;
+    const list = (this.stamps.get(origin) ?? []).filter((t) => nowMs - t < 60_000);
+    if (list.length < this.perMinute) return nowMs;
+    return Math.min(...list) + 60_000;
+  }
 }

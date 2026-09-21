@@ -26,6 +26,7 @@ demo/data/
 coverage/
 playwright-report/
 test-results/
+test-results-live/
 blob-report/
 .playwright-mcp/
 evidence/

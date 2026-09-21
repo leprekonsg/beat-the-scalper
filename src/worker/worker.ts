@@ -268,6 +268,9 @@ export class Worker implements WorkerApi {
     this.currentAction = 'observing';
     let becameCandidate = false;
     let obs: Observation | null = null;
+    // Set only when the origin limiter denies this attempt (never a failure: no adapter call was made,
+    // so consecutiveFailures and lastObservationId are left untouched below).
+    let deferredRetryAtMs: number | null = null;
     try {
       if (this.rateLimiter.tryAcquire(this.adapter.origin, now.getTime())) {
         this.store.appendEvent({ missionId: mission.id, type: 'observation.started', at: this.clock.now().toISOString(), provenance: this.adapter.provenance, payload: { origin: this.adapter.origin } });
@@ -303,6 +306,18 @@ export class Worker implements WorkerApi {
         }
         // rate_limited and unsupported_layout: no forced transition here; scheduling below honours retryAfterSeconds,
         // and unsupported_layout may be resolved by the interpreter during candidate validation.
+      } else {
+        // Denied by the origin limiter: no adapter call happened, so this is not an observation failure.
+        // Record the deferral and let the re-plan below cap the wait at the limiter's own window instead
+        // of the full cadence, so an imported signal never loses its priority to a busy origin bucket.
+        deferredRetryAtMs = this.rateLimiter.nextAllowedAt(this.adapter.origin, now.getTime());
+        this.store.appendEvent({
+          missionId: mission.id,
+          type: 'observation.deferred',
+          at: this.clock.now().toISOString(),
+          provenance: this.provFor(mission),
+          payload: { reason: 'origin_rate_limit', origin: this.adapter.origin, retryAt: new Date(deferredRetryAtMs).toISOString() },
+        });
       }
     } finally {
       this.store.releaseObservation(mission.id, this.clock.now().toISOString());
@@ -315,7 +330,15 @@ export class Worker implements WorkerApi {
         retryAfterSeconds: obs?.retryAfterSeconds ?? null,
       });
       this.lastPlan = plan;
-      this.store.patchMission(mission.id, { nextCheckAt: plan.nextCheckAt }, this.clock.now().toISOString());
+      let nextCheckAt = plan.nextCheckAt;
+      if (deferredRetryAtMs !== null) {
+        // Never wait past what the origin limiter itself would allow: honour the policy's own cadence
+        // when it is sooner, otherwise fall back to the limiter's window (this also covers a null
+        // plan.nextCheckAt, e.g. the mission expired in the same instant).
+        nextCheckAt = new Date(plan.nextCheckAt !== null ? Math.min(deferredRetryAtMs, Date.parse(plan.nextCheckAt)) : deferredRetryAtMs).toISOString();
+        this.lastPlan = { ...plan, labels: [...plan.labels, 'Deferred: origin limit'] };
+      }
+      this.store.patchMission(mission.id, { nextCheckAt }, this.clock.now().toISOString());
     }
     return becameCandidate;
   }
