@@ -68,6 +68,8 @@ Findings:
 
 ### Live reaction-speed runs (2026-09-19, step 4b)
 
+Correction (2026-09-24): the "reaction floor" figures below (cadence/2 + p95s) are not 95% bounds. At 120 s the p95 is about 125 s. See `docs/evaluation-results.md`, "Correction and restock-alert path". The harness now builds the worker with `src/worker/liveObserve.ts` and takes timings from the worker's event log.
+
 Runner: `npm run lazada:live-reaction` (`scripts/lazada-live-reaction.ts`) with `src/adapters/lazadaLive.ts` under the real `Worker`, `SystemClock` and `worker.start(1000)`; policy `lazada_assist`, baseline and priority 120 s, 1 observation per origin per minute, `liveObserveEnabled` and the feasibility pass set only in the run's in-memory store; mission authority `observe`; preparation executor refuses every call (asserted never called). Approved by the user in session: cadence 120 s, 5 reads, Gemini interpreter, same URL, fresh profile `lazada-reaction`. Time 03:27:01 to 03:35:33 UTC (11:27 to 11:35 SGT).
 
 | Read | Planned -> started (ms) | Observe (ms) | of which settle wait (ms) | Parse (ms) | Availability | Access control | Gemini assess (ms) |

@@ -135,6 +135,8 @@ export const OfferedItemSchema = z.object({
   packagingCondition: PackagingConditionSchema,
   packagingEvidenceRegion: z.string().nullable(),
   purchaseLimit: z.int().nullable(),
+  /** Listing artwork reference (e.g. og:image without query). Keys the packaging cache; absent on adapters that do not read it. */
+  artworkRef: z.string().nullable().optional(),
 });
 export type OfferedItem = z.infer<typeof OfferedItemSchema>;
 

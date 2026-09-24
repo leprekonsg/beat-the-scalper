@@ -16,6 +16,7 @@ import type { OfferInterpreter } from '../../src/worker/worker.ts';
 import { FakeAdapter, FakeExecutor, makeIntent, makeObservation } from '../../src/worker/fakes.ts';
 import type { FakeExecutorOptions } from '../../src/worker/fakes.ts';
 import type { CartState, ExecutorStepResult, PreparationExecutor } from '../../src/adapters/types.ts';
+import type { RestockNotification, RestockNotifier } from '../../src/worker/notifier.ts';
 
 const T0 = '2026-09-18T00:00:00.000Z';
 const EXPIRES = '2026-09-25T00:00:00.000Z';
@@ -167,6 +168,8 @@ interface HarnessOptions<E extends PreparationExecutor | null> {
   interpreter?: OfferInterpreter | null;
   apiReadiness?: 'live' | 'offline_replay' | 'blocked';
   arm?: boolean;
+  notifier?: RestockNotifier | null;
+  followUpWhileAvailableMs?: number | null;
 }
 
 function harness<E extends PreparationExecutor | null = FakeExecutor>(opts: HarnessOptions<E> = {}) {
@@ -187,6 +190,8 @@ function harness<E extends PreparationExecutor | null = FakeExecutor>(opts: Harn
     interpreter: opts.interpreter ?? null,
     apiReadiness: opts.apiReadiness ?? 'offline_replay',
     log: (line) => logs.push(line),
+    notifier: opts.notifier ?? null,
+    followUpWhileAvailableMs: opts.followUpWhileAvailableMs ?? null,
   });
   const missionId = created.id;
   if (opts.arm !== false) worker.approveIntent(missionId, { expiresAt: intent.expiresAt, authority: intent.authority });
@@ -1132,5 +1137,226 @@ describe('health, latency, and provenance (Section 7)', () => {
       expect(order(before)).toBeGreaterThanOrEqual(0);
       expect(order(before)).toBeLessThan(order(after));
     }
+  });
+});
+
+// ---------------------------------------------------------------------
+// Restock alert and packaging cache: restocks sell out within a minute, so the alert fires on
+// detection from deterministic checks, and the artwork read happens while the item is out of stock.
+// ---------------------------------------------------------------------
+
+function recordingNotifier(fail = false): RestockNotifier & { sent: RestockNotification[] } {
+  const sent: RestockNotification[] = [];
+  return {
+    name: 'recording',
+    sent,
+    async notify(n) {
+      sent.push(n);
+      if (fail) throw new Error('webhook responded HTTP 500');
+    },
+  };
+}
+
+function soldOutWithOffer(offer: Partial<NonNullable<Observation['offer']>> = {}): Observation {
+  return makeObservation({ availability: 'UNAVAILABLE', offer: { ...offer } as NonNullable<Observation['offer']> });
+}
+
+describe('restock alert and packaging cache', () => {
+  it('alerts on the candidate before any model call, listing the unresolved checks', async () => {
+    const notifier = recordingNotifier();
+    let typesAtModelCall: string[] = [];
+    let h: ReturnType<typeof harness> | null = null;
+    const inner = stubInterpreter({ ok: true, assessment: { packagingCondition: 'stated_removed' } });
+    const interpreter: OfferInterpreter = {
+      async assess(input) {
+        typesAtModelCall = h!.eventTypes();
+        return inner.assess(input);
+      },
+    };
+    h = harness({ intent: { authority: 'observe', packagingPolicy: 'removed_allowed' }, script: [availableObs({}, { packagingCondition: 'unreadable' })], interpreter, notifier });
+
+    await h.worker.tick();
+    await h.worker.stop();
+
+    expect(typesAtModelCall).toContain('restock_alert.sent');
+    expect(notifier.sent.map((n) => n.kind)).toEqual(['go']);
+    expect(notifier.sent[0]!.details.join(' ')).toMatch(/Packaging notice unreadable/);
+    expect(notifier.sent[0]!.productUrl).toBe(h.intent.target.productUrl);
+    expect(h.eventTypes()).toContain('restock_alert.delivered');
+  });
+
+  it('does not alert on a definite mismatch (seller)', async () => {
+    const notifier = recordingNotifier();
+    const h = harness({ intent: { authority: 'observe' }, script: [availableObs({}, { sellerRef: 'scalper-shop' })], notifier });
+
+    await h.worker.tick();
+
+    expect(notifier.sent).toEqual([]);
+    const suppressed = h.timeline().find((e) => e.type === 'restock_alert.suppressed')!;
+    expect((suppressed.payload.blockers as string[]).join(' ')).toMatch(/scalper-shop/);
+  });
+
+  it('does not alert when the item price alone exceeds the budget while the delivered total is unknown', async () => {
+    const notifier = recordingNotifier();
+    const h = harness({ intent: { authority: 'observe', maxDeliveredPriceMinor: 10_000 }, script: [availableObs({}, { itemPriceMinor: 12_000, deliveryFeeMinor: null })], notifier });
+
+    await h.worker.tick();
+
+    expect(notifier.sent).toEqual([]);
+    const suppressed = h.timeline().find((e) => e.type === 'restock_alert.suppressed')!;
+    expect((suppressed.payload.blockers as string[]).join(' ')).toMatch(/Item price S\$120\.00 alone exceeds budget S\$100\.00/);
+  });
+
+  it('reads the artwork while out of stock, then resolves the restock from the cache with no model call', async () => {
+    const notifier = recordingNotifier();
+    const interpreter = stubInterpreter({ ok: true, assessment: { packagingCondition: 'stated_removed' } }, 'manual_input');
+    const sold = soldOutWithOffer({ packagingCondition: 'unreadable', artworkRef: 'img.example/etb.jpg' });
+    const restock = availableObs({}, { packagingCondition: 'unreadable', artworkRef: 'img.example/etb.jpg' });
+    const h = harness({ intent: { authority: 'observe', packagingPolicy: 'ask' }, script: [sold, restock], interpreter, notifier });
+
+    await h.worker.tick();
+    await h.worker.stop(); // waits for the background artwork read
+    expect(interpreter.calls).toHaveLength(1);
+    expect(h.eventTypes()).toContain('packaging.cache_refreshed');
+
+    await h.tickAfter(30_000);
+    await h.worker.stop();
+
+    expect(interpreter.calls).toHaveLength(1); // no model call on the restock path
+    const applied = h.timeline().find((e) => e.type === 'packaging.cache_applied')!;
+    expect(applied.payload.condition).toBe('stated_removed');
+    expect(h.store.getSetting(`mission.${h.missionId}.assessment`)).toContain(sold.evidenceId);
+    expect(notifier.sent.map((n) => n.kind)).toEqual(['go']);
+    expect(notifier.sent[0]!.details.join(' ')).toMatch(/states a packaging change/);
+    // Observe authority: the review is the user's at purchase time; BTS keeps watching instead of pausing.
+    expect(h.state()).toBe('WATCHING');
+    expect(h.eventTypes()).toContain('condition.review_requested');
+  });
+
+  it('a changed artwork misses the cache and falls back to the validation-time model call', async () => {
+    const interpreter = stubInterpreter({ ok: true, assessment: { packagingCondition: 'stated_removed' } });
+    const h = harness({
+      intent: { authority: 'observe', packagingPolicy: 'removed_allowed' },
+      script: [soldOutWithOffer({ packagingCondition: 'unreadable', artworkRef: 'img.example/a.jpg' }), availableObs({}, { packagingCondition: 'unreadable', artworkRef: 'img.example/b.jpg' })],
+      interpreter,
+    });
+
+    await h.worker.tick();
+    await h.worker.stop();
+    await h.tickAfter(30_000);
+    await h.worker.stop();
+
+    const missed = h.timeline().find((e) => e.type === 'packaging.cache_missed')!;
+    expect(missed.payload.reason).toMatch(/artwork changed/);
+    expect(interpreter.calls).toHaveLength(2); // background read + validation read
+    expect(h.eventTypes()).toContain('interpretation.completed');
+  });
+
+  it('retracts the alert when validation finds a mismatch the deterministic checks could not see', async () => {
+    const notifier = recordingNotifier();
+    const interpreter = stubInterpreter({ ok: true, assessment: { packagingCondition: 'stated_removed' } });
+    const h = harness({ intent: { authority: 'observe', packagingPolicy: 'must_be_intact' }, script: [availableObs({}, { packagingCondition: 'unreadable' })], interpreter, notifier });
+
+    await h.worker.tick();
+    await h.worker.stop();
+
+    expect(notifier.sent.map((n) => n.kind)).toEqual(['go', 'retract']);
+    expect(notifier.sent[1]!.details.join(' ')).toMatch(/wrapping will be removed/);
+    expect(h.eventTypes()).toContain('restock_alert.retracted');
+  });
+
+  it('records a failed delivery as an event and never throws into the tick', async () => {
+    const notifier = recordingNotifier(true);
+    const h = harness({ intent: { authority: 'observe' }, script: [availableObs()], notifier });
+
+    await h.worker.tick();
+    await h.worker.stop();
+
+    const failed = h.timeline().find((e) => e.type === 'restock_alert.delivery_failed')!;
+    expect(failed.payload.error).toBe('webhook responded HTTP 500');
+    expect(h.eventTypes()).toContain('validation.completed');
+  });
+
+  it('observe authority keeps watching when the interpreter is unavailable', async () => {
+    const interpreter = stubInterpreter({ ok: false, reason: 'model timed out' });
+    const h = harness({ intent: { authority: 'observe', packagingPolicy: 'removed_allowed' }, script: [availableObs({}, { packagingCondition: 'unreadable' })], interpreter });
+
+    await h.worker.tick();
+
+    expect(h.state()).toBe('WATCHING');
+    expect(h.eventTypes()).toContain('interpretation.blocked');
+  });
+
+  it('observation.started carries the planned instant, so slack comes from the event log alone', async () => {
+    const h = harness({ script: [soldOutObs()] });
+    const planned = h.mission().nextCheckAt;
+
+    await h.tickAfter(700);
+
+    const started = h.timeline().find((e) => e.type === 'observation.started')!;
+    expect(started.payload.plannedAt).toBe(planned);
+    expect(Date.parse(started.at) - Date.parse(planned!)).toBe(700);
+  });
+});
+
+describe('restock episode timing (sell-out measurement)', () => {
+  // The live shape: 120 s cadence, 2 reads per origin per minute, 30 s follow-up.
+  const policy: MonitorPolicy = { ...DEMO_MONITOR_POLICY, baselineIntervalSeconds: 120, priorityIntervalSeconds: 120, maxObservationsPerOriginPerMinute: 2 };
+  const untilNext = (h: ReturnType<typeof harness>): number => Date.parse(h.mission().nextCheckAt!) - Date.parse(h.nowIso());
+
+  it('re-reads every follow-up interval while in stock and records the sell-out bounds', async () => {
+    const h = harness({
+      intent: { authority: 'observe' },
+      policy,
+      followUpWhileAvailableMs: 30_000,
+      script: [soldOutObs({ observationId: 'obs_a' }), availableObs({ observationId: 'obs_b' }), availableObs({ observationId: 'obs_c' }), soldOutObs({ observationId: 'obs_d' })],
+    });
+
+    await h.worker.tick(); // T0: sold out
+    expect(untilNext(h)).toBe(120_000);
+    await h.tickAfter(120_000); // T0+120 s: restock seen, alerted
+    expect(h.state()).toBe('WATCHING');
+    expect(untilNext(h)).toBe(30_000);
+    await h.tickAfter(30_000); // T0+150 s: still in stock
+    expect(untilNext(h)).toBe(30_000);
+    await h.tickAfter(30_000); // T0+180 s: sold out
+    await h.worker.stop();
+
+    const ended = h.timeline().find((e) => e.type === 'restock.ended')!;
+    expect(ended.payload).toMatchObject({ minDurationMs: 30_000, maxDurationMs: 180_000, availableReads: 2, startBounded: true, endedObservationId: 'obs_d' });
+    expect(untilNext(h)).toBe(120_000); // back to the cadence
+    expect(h.eventTypes().filter((t) => t === 'restock_alert.sent')).toHaveLength(1); // one alert per restock
+    expect(h.eventTypes()).not.toContain('observation.deferred');
+  });
+
+  it('keeps the cadence after a restock when follow-up is off (default), and still records the episode', async () => {
+    const h = harness({ intent: { authority: 'observe' }, policy, script: [soldOutObs({ observationId: 'obs_a' }), availableObs({ observationId: 'obs_b' }), soldOutObs({ observationId: 'obs_c' })] });
+
+    await h.worker.tick();
+    await h.tickAfter(120_000);
+    expect(untilNext(h)).toBe(120_000);
+    await h.tickAfter(120_000);
+    await h.worker.stop();
+
+    const ended = h.timeline().find((e) => e.type === 'restock.ended')!;
+    expect(ended.payload).toMatchObject({ minDurationMs: 0, maxDurationMs: 240_000, availableReads: 1 });
+  });
+
+  it('an UNKNOWN read does not end an episode, and a first read in stock leaves the start unbounded', async () => {
+    const h = harness({
+      intent: { authority: 'observe' },
+      policy,
+      followUpWhileAvailableMs: 30_000,
+      script: [availableObs({ observationId: 'obs_a' }), failedObs(), soldOutObs({ observationId: 'obs_c' })],
+    });
+
+    await h.worker.tick(); // T0: in stock on the very first read
+    await h.tickAfter(30_000); // failed read
+    expect(h.eventTypes()).not.toContain('restock.ended');
+    await h.tickAfter(120_000);
+    await h.worker.stop();
+
+    const ended = h.timeline().find((e) => e.type === 'restock.ended')!;
+    expect(ended.payload).toMatchObject({ startedAfter: null, startBounded: false, availableReads: 1, minDurationMs: 0 });
   });
 });

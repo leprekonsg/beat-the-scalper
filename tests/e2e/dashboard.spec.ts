@@ -117,6 +117,9 @@ test('A09/A12/A14/A19: an ask-policy packaging notice pauses for review, and acc
   await expect(page.getByTestId('accept-condition')).toBeVisible();
   expect(await missionEventTypes(missionId)).toContain('condition.review_requested');
   expect(await storeOrders()).toHaveLength(0);
+  // The restock alert fired on detection, before the review pause, and carries the packaging check.
+  await expect(page.getByTestId('restock-alert')).toContainText('In stock now');
+  await expect(page.getByTestId('restock-alert')).toContainText('Listing states a packaging change');
 
   await page.getByTestId('accept-condition').click();
 

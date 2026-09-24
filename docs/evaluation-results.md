@@ -166,6 +166,50 @@ Run 5, 06:03 to 07:04 UTC (14:03 to 15:04 SGT), cadence 120 s, 30 reads, `--max-
 - The item was out of stock throughout, so validation and CHECKOUT_READY were not reached live; the Gemini timing is the identical assess call made by the script on each read and is labelled `out_of_band` in the record.
 - Costs: about $0.004 per Gemini call, one call per read (64 calls across the five runs).
 
+### Correction and restock-alert path (2026-09-24)
+
+The "reaction floor" rows above (cadence/2 + p95s) mixed a mean wait with p95 timings. They were reported as a 95% bound, which they are not. The wait for the next read is uniform over the interval, so its p95 is 0.95 x cadence. Recomputed from the same runs, with no new access:
+
+| Run | Reported "floor" | Mean (cadence/2 + p50s) | p95 (0.95 x cadence + p95s) |
+|---|---|---|---|
+| 1 | 68.8 s | 68.1 s | 122.8 s |
+| 2 | 74.3 s | 68.4 s | 128.3 s |
+| 3 | 71.1 s | 67.8 s | 125.1 s |
+| 4 | 70.8 s | 67.9 s | 124.8 s |
+| 5 | 70.7 s | 68.4 s | 124.7 s |
+
+Restocks on this listing typically sell out within a minute (user observation), and on the live path the user does the buying. The end of the pipeline is therefore the user being told, and the metric is the share of restocks that alert with time left to buy. `catchProbability` in `src/eval/reactionStats.ts` computes it as (sell-out - pipeline - time to buy) / cadence.
+
+Code changes, all in the worker, with no change to access:
+
+- The worker raises a restock alert on the CANDIDATE observation from deterministic checks alone: `restock_alert.sent`, then a terminal bell, the dashboard banner and a desktop notification, plus `BTS_ALERT_WEBHOOK_URL` when set. Checks still unknown at that instant are listed as "check before paying". Only a definite mismatch suppresses the alert. A mismatch found later by validation sends `restock_alert.retracted`.
+- The packaging read moved off the restock path. While the item is out of stock, the worker interprets the listing artwork in the background and caches the result (keyed on product, variant and og:image, max age 30 min). A restock resolves packaging from that cache with no model call.
+- Under observe authority, a packaging review no longer pauses the mission (pausing would stop watching while the user buys).
+- `observation.started` carries `plannedAt`, so the live harness takes every timing from the worker's event log.
+
+Using Run 7 timings (slack p95 1.0 s, observe p95 5.3 s cold / p50 1.9 s), the alert pipeline is about 2.6 s p50 and 6.3 s p95. With a 60 s sell-out and an assumed 20 s for the user to buy:
+
+| Detection | Share of restocks alerted with 20 s left |
+|---|---|
+| Polling at 120 s | 28% |
+| Polling at 60 s | 56% |
+| Imported alert (signal to read 0.7 s, Run 2) | every alert that reaches BTS within about 30 s of the restock |
+
+Before this change there was no alert at all. Validation also waited on the model: Gemini p95 about 6 s, and 12-25 s on the `claude-opus-5` default. Polling alone cannot reliably beat a one-minute sell-out at any cadence validated so far. How much delay Lazada's own restock alert adds, and whether it can reach BTS automatically, has not been measured.
+
+### Eval gaps and instruments (2026-09-24)
+
+The live runs above measured timing only; every read was out of stock. Against a one-minute sell-out, four inputs decide the catch rate and none was measured. Each now has an instrument; results are added here when they exist.
+
+| Gap | Instrument | Status |
+|---|---|---|
+| In-stock detection never seen live (0 of about 70 reads) | `lazada:live-reaction --reads=1` on in-stock listings; `--seller/--format/--language` so the alert fires instead of being suppressed | Needs listing URLs and a per-run approval |
+| False restock from buttons rendering before the stock line | Adapter waits up to `purchaseConfirmMs` (1000 ms) for a sold-out line when readiness came from a button; `purchaseConfirm` in evidence, `availableReadsToVerify` with screenshots in the run summary | Unit-tested (race reproduced, then prevented); live rate unmeasured |
+| Sell-out time (60 s is an observation, not a measurement) | Worker `restock.ended` with min/max in-stock bounds; `--follow-up-seconds=30` sets 30 s resolution | Unit-tested; needs a live restock |
+| Alert delivery and time to buy (20 s assumed) | `npm run alert:drill -- --manual --click-url=<url>` | Needs `BTS_ALERT_WEBHOOK_URL` and a person |
+
+The confirm wait costs at most 1 s on a true restock, under 1 point of catch rate at 120 s polling.
+
 ## Automated test suites (2026-09-19)
 
 | Command | Result |

@@ -61,6 +61,12 @@ const EnvSchema = z.object({
   BTS_DEMO_STORE_PORT: intWithDefault(4310),
   BTS_DEMO_ADMIN_PORT: intWithDefault(4311),
   BTS_DATA_DIR: z.string().default('./data'),
+  /** Optional restock-alert webhook (e.g. an ntfy topic URL). Empty = terminal bell and dashboard only. */
+  BTS_ALERT_WEBHOOK_URL: z
+    .string()
+    .optional()
+    .transform((s) => (s && s.trim() ? s.trim() : null))
+    .refine((s) => s === null || URL.canParse(s), { message: 'must be a full URL, e.g. https://ntfy.sh/<your-topic>' }),
 });
 
 export interface AppConfig {
@@ -85,6 +91,8 @@ export interface AppConfig {
   demoStorePort: number;
   demoAdminPort: number;
   dataDir: string;
+  /** Restock alerts are also POSTed here when set (see src/worker/notifier.ts). */
+  alertWebhookUrl: string | null;
   monitorPolicy: MonitorPolicy;
   /** Origins the UI may call the API from. */
   uiOrigins: string[];
@@ -132,6 +140,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { dotenv?
     demoStorePort: e.BTS_DEMO_STORE_PORT,
     demoAdminPort: e.BTS_DEMO_ADMIN_PORT,
     dataDir: resolve(process.cwd(), e.BTS_DATA_DIR),
+    alertWebhookUrl: e.BTS_ALERT_WEBHOOK_URL,
     monitorPolicy: v.policy,
     uiOrigins: [`http://127.0.0.1:${e.BTS_UI_PORT}`, `http://localhost:${e.BTS_UI_PORT}`],
     demoStoreOrigin: `http://127.0.0.1:${e.BTS_DEMO_STORE_PORT}`,

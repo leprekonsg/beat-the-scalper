@@ -11,21 +11,16 @@
  * known packaging notice on this listing is artwork-only text the deterministic parser cannot read
  * (see src/adapters/lazadaLive.ts), so a candidate almost always needs it.
  */
-import { chromium } from 'playwright';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { loadConfig } from '../../src/config.ts';
 import { createModelClient } from '../../src/agent/modelClient.ts';
-import { FableOfferInterpreter } from '../../src/agent/assess.ts';
-import { LazadaLiveObservationAdapter } from '../../src/adapters/lazadaLive.ts';
-import type { CartState, ExecutorStepResult, PreparationExecutor } from '../../src/adapters/types.ts';
-import { validateMonitorPolicy } from '../../src/domain/policy.ts';
-import { PurchaseIntentSchema, type Provenance, type PurchaseIntent } from '../../src/domain/types.ts';
 import { SystemClock } from '../../src/domain/time.ts';
 import { Store } from '../../src/storage/db.ts';
-import { Worker, type OfferInterpreter } from '../../src/worker/worker.ts';
+import { createLiveObserveWorker, launchLiveBrowser, liveObserveIntent, liveObservePolicy } from '../../src/worker/liveObserve.ts';
+import { ConsoleNotifier } from '../../src/worker/notifier.ts';
 
 loadConfig(); // populates process.env from .env (never overwrites an already-set var) before reading it below
 
@@ -38,60 +33,13 @@ const PROVIDER_KEY_NAME = PROVIDER === 'gemini' ? 'GEMINI_API_KEY' : 'ANTHROPIC_
 
 const missingVar = !LAZADA_URL ? 'BTS_LIVE_LAZADA_URL' : !APPROVED_BY ? 'BTS_LIVE_LAZADA_APPROVED' : !PROVIDER_KEY ? PROVIDER_KEY_NAME : null;
 
-/** Mission authority is 'observe', so the worker's canPrepare gate is never true regardless of this
- * executor; `calls` is asserted to stay 0 as a second, independent check. */
-class BlockedPrepareExecutor implements PreparationExecutor {
-  readonly mode = 'lazada_prepare' as const;
-  calls = 0;
-  constructor(readonly origin: string) {}
-  private refuse<T>(): ExecutorStepResult<T> {
-    this.calls += 1;
-    return { ok: false, error: 'live preparation not enabled', outcomeUnclear: false };
-  }
-  async readCart(): Promise<ExecutorStepResult<CartState>> {
-    return this.refuse<CartState>();
-  }
-  async addOneToCart(): Promise<ExecutorStepResult<CartState>> {
-    return this.refuse<CartState>();
-  }
-  async reviewCheckout(): Promise<ExecutorStepResult<CartState>> {
-    return this.refuse<CartState>();
-  }
-  async findOrderForSession(): Promise<ExecutorStepResult<{ orderRef: string; status: string; quantity: number; totalMinor: number } | null>> {
-    return this.refuse();
-  }
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async close(): Promise<void> {}
-}
-
-interface InterpretationRecord {
-  ms: number;
-  provenance: Provenance;
-  ok: boolean;
-}
-
-/** Wraps the real interpreter to measure wall time per observationId without touching worker.ts. */
-class TimingInterpreter implements OfferInterpreter {
-  readonly records = new Map<string, InterpretationRecord>();
-  constructor(private readonly inner: OfferInterpreter) {}
-  async assess(input: Parameters<OfferInterpreter['assess']>[0]): ReturnType<OfferInterpreter['assess']> {
-    const start = performance.now();
-    const result = await this.inner.assess(input);
-    this.records.set(input.observation.observationId, { ms: performance.now() - start, provenance: result.provenance, ok: result.ok });
-    return result;
-  }
-}
-
 test('live Lazada single observation under the real Worker/scheduler (observe-only authority)', async ({}, testInfo) => {
   test.skip(missingVar !== null, `Set ${missingVar} (see .env.example) to run this live test`);
 
   const url = new URL(LAZADA_URL!);
   expect(url.hostname.endsWith('lazada.sg'), `host ${url.hostname} is not a lazada.sg host`).toBe(true);
 
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: 'en-SG', timezoneId: 'Asia/Singapore' });
-  const page = await context.newPage();
-
+  const browser = await launchLiveBrowser({ profileDir: null });
   const dataDir = mkdtempSync(join(tmpdir(), 'bts-lazada-reaction-live-'));
   const store = new Store(':memory:');
   // This test IS a feasibility-gate exercise: the setting is set in-process only, in a throwaway
@@ -99,79 +47,23 @@ test('live Lazada single observation under the real Worker/scheduler (observe-on
   // is never touched.
   store.setSetting('feasibility.observe', 'passed');
 
-  const adapter = new LazadaLiveObservationAdapter({
-    page,
-    productUrl: url.toString(),
-    approvedBy: APPROVED_BY!,
-    dataDir,
-    onEvidence: (e) => {
-      try {
-        store.putEvidence(e);
-      } catch {
-        /* best-effort provenance capture only */
-      }
-    },
-  });
-  const executor = new BlockedPrepareExecutor(adapter.origin);
-  const timingInterpreter = new TimingInterpreter(new FableOfferInterpreter(createModelClient(modelCfg), { dataDir }));
-
-  const policyResult = validateMonitorPolicy({
-    mode: 'lazada_assist',
-    baselineIntervalSeconds: 300,
-    priorityIntervalSeconds: 300,
-    maxObservationsPerOriginPerMinute: 1,
-    liveObserveEnabled: true,
-    livePrepareEnabled: false,
-    label: 'reviewed_live',
-  });
-  if (!policyResult.ok) throw new Error(`MonitorPolicy rejected: ${policyResult.error}`);
-
   const finalUrl = url.toString();
-  const retailerProductId = /-i(\d+)/.exec(finalUrl)?.[1] ?? null;
-  const variantId = /-s(\d+)/.exec(finalUrl)?.[1] ?? null;
-  const intent: PurchaseIntent = PurchaseIntentSchema.parse({
-    id: `msn_reaction_live_${Date.now()}`,
-    revision: 1,
-    fulfillmentKey: `fkey_reaction_live_${Date.now()}`,
-    mode: 'lazada_assist',
-    accountRef: 'unauthenticated',
-    target: {
-      productUrl: finalUrl,
-      retailerProductId,
-      variantId,
-      sellerRef: 'pokemon-store-online-singapore',
-      sellerEvidenceId: null,
-      productFormat: 'Elite Trainer Box',
-      language: 'English',
-      description: 'Live reaction spec target (approved run only; observe authority)',
-    },
-    quantity: 1,
-    currency: 'SGD',
-    maxDeliveredPriceMinor: 20_000,
-    packagingPolicy: 'ask',
-    allowedConditionEvidenceIds: [],
-    launchAt: null,
-    launchBasis: 'unknown',
-    launchEvidenceId: null,
-    restockWindow: { timezone: 'Asia/Singapore', startLocal: '13:00', endLocal: '14:00', basis: 'user_observation', enabled: false },
-    expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
-    authority: 'observe',
-  });
-
   const clock = new SystemClock();
-  const worker = new Worker({
+  const { worker, executor } = createLiveObserveWorker({
     store,
     clock,
-    policy: policyResult.policy,
-    adapter,
-    executor,
-    interpreter: timingInterpreter,
-    apiReadiness: 'live',
+    page: browser.page,
+    productUrl: finalUrl,
+    approvedBy: APPROVED_BY!,
+    dataDir,
+    policy: liveObservePolicy({ cadenceSeconds: 300, maxObservationsPerOriginPerMinute: 1 }),
+    modelClient: createModelClient(modelCfg),
+    notifier: new ConsoleNotifier(),
   });
 
+  const intent = liveObserveIntent({ productUrl: finalUrl, expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(), description: 'Live reaction spec target (approved run only; observe authority)' });
   const mission = store.createMission(intent, clock.now().toISOString());
   worker.approveIntent(mission.id, { expiresAt: intent.expiresAt, authority: 'observe' });
-  const scheduledAt = store.getMission(mission.id)!.nextCheckAt!;
 
   const wallStart = Date.now();
   const BUDGET_MS = 120_000;
@@ -184,9 +76,8 @@ test('live Lazada single observation under the real Worker/scheduler (observe-on
       await new Promise((r) => setTimeout(r, 150));
     }
   } finally {
-    await worker.stop();
+    await worker.stop(); // waits for the background packaging read started by an out-of-stock observation
   }
-  await context.close();
   await browser.close();
 
   expect(executor.calls, 'the preparation executor must never be called under observe-only authority').toBe(0);
@@ -202,9 +93,11 @@ test('live Lazada single observation under the real Worker/scheduler (observe-on
   const evidence = store.getEvidence(obs.evidenceId);
   const finalUrlHost = evidence?.observedFields.finalUrl ? new URL(String(evidence.observedFields.finalUrl)).hostname : url.hostname;
 
-  const schedulerSlackMs = Date.parse(started!.at) - Date.parse(scheduledAt);
+  const schedulerSlackMs = Date.parse(started!.at) - Date.parse(started!.payload.plannedAt as string);
   const observeMs = Date.parse(completed!.at) - Date.parse(started!.at);
-  const interp = timingInterpreter.records.get(observationId) ?? null;
+  // Model time from the worker's own events: validation (item in stock) or the background artwork read (out of stock).
+  const interpEvent = chronological.find((e) => (e.type === 'interpretation.completed' || e.type.startsWith('packaging.cache_refresh')) && e.payload.observationId === observationId) ?? null;
+  const interp = interpEvent ? { ms: interpEvent.payload.durationMs as number, provenance: interpEvent.provenance } : null;
   // readiness/readinessMs/buyBoxSelector/soldOutTextOutsideBuyBox: added when the fixed 4 s
   // settle sleep was replaced by a bounded buy-box readiness wait (docs/lazada-feasibility.md, 2026-09-21
   // note). Printed, not asserted on, until a live run confirms the buy-box selectors actually match.

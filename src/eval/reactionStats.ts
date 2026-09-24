@@ -40,16 +40,41 @@ export function summarizeTimings(values: number[]): TimingStats {
 }
 
 /**
- * reactionFloorMs: the best-case detection-to-decision time for an *unannounced* restock under a
- * fixed polling cadence. `cadenceSeconds/2` is the mean wait for the poller to notice a change
- * that can occur at any point in the interval (a restock landing right after a check is missed by
- * nearly the whole cadence; one landing right before is caught almost immediately -- the average
- * of a uniform draw over the interval is half of it). The p95 timings are added, not the p50 or
- * mean ones, because this number is reported as a bound the system meets at least 95% of the time,
- * not a lucky-case figure.
+ * Reaction to an *unannounced* restock under fixed-interval polling. A restock lands uniformly at
+ * random within the interval, so the wait until the next read is U(0, cadence): mean cadence/2, p95
+ * 0.95 x cadence. `pipelineMs*` is everything after the read is due (scheduler slack, observe, and
+ * whatever runs before the alert). The two figures pair like with like: mean wait + p50 pipeline, and
+ * p95 wait + p95 pipeline. (The earlier "floor", cadence/2 + p95s, mixed a mean with p95s and was
+ * reported as a 95% bound it was not: at 120 s it said ~71 s where the p95 is ~128 s.)
  */
-export function reactionFloorMs(input: { cadenceSeconds: number; observeMsP95: number | null; interpretationMsP95: number | null; validationMsP95: number | null }): number {
-  return (input.cadenceSeconds * 1000) / 2 + (input.observeMsP95 ?? 0) + (input.interpretationMsP95 ?? 0) + (input.validationMsP95 ?? 0);
+export interface ReactionEstimate {
+  meanMs: number;
+  p95Ms: number;
+}
+
+export function reactionEstimate(input: { cadenceSeconds: number; pipelineMsP50: number | null; pipelineMsP95: number | null }): ReactionEstimate {
+  const cadenceMs = input.cadenceSeconds * 1000;
+  return { meanMs: cadenceMs / 2 + (input.pipelineMsP50 ?? 0), p95Ms: 0.95 * cadenceMs + (input.pipelineMsP95 ?? 0) };
+}
+
+/**
+ * Share of restocks that alert the user with at least `humanActionSeconds` left before sell-out:
+ * P(wait + pipeline + human <= sellout) with wait ~ U(0, cadence), i.e. (sellout - pipeline - human) /
+ * cadence clamped to [0, 1]. With a sub-minute sell-out this, not the mean reaction, is the number that
+ * says whether polling alone can work. Pass a p95 pipeline for a conservative figure.
+ */
+export function catchProbability(input: { cadenceSeconds: number; selloutSeconds: number; pipelineMs: number; humanActionSeconds: number }): number {
+  const marginMs = input.selloutSeconds * 1000 - input.pipelineMs - input.humanActionSeconds * 1000;
+  if (marginMs <= 0) return 0;
+  const cadenceMs = input.cadenceSeconds * 1000;
+  if (cadenceMs <= 0) return 1;
+  return Math.min(1, marginMs / cadenceMs);
+}
+
+/** Pipeline time from the planned read instant to the alert, per read: slack + observe + validation-to-alert. */
+export function alertPipelineMs(r: { schedulerSlackMs: number | null; observeMs: number | null; alertAfterObserveMs: number | null }): number | null {
+  if (r.schedulerSlackMs === null || r.observeMs === null) return null;
+  return Math.max(0, r.schedulerSlackMs) + r.observeMs + (r.alertAfterObserveMs ?? 0);
 }
 
 /** The `to` state and `at` instant of one `mission.transition` event, as read off the store's event log. */

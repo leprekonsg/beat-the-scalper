@@ -3,7 +3,7 @@
  * (src/eval/reactionStats.ts). No script, browser, worker, or network involved.
  */
 import { describe, expect, it } from 'vitest';
-import { max, missionStateAtOrBefore, p50, p95, percentile, reactionFloorMs, summarizeTimings } from '../../src/eval/reactionStats.ts';
+import { alertPipelineMs, catchProbability, max, missionStateAtOrBefore, p50, p95, percentile, reactionEstimate, summarizeTimings } from '../../src/eval/reactionStats.ts';
 
 describe('percentile / p50 / p95 / max', () => {
   it('returns null for every stat on an empty array', () => {
@@ -74,20 +74,53 @@ describe('summarizeTimings', () => {
   });
 });
 
-describe('reactionFloorMs', () => {
-  it('is cadence/2 when there is no measured latency at all', () => {
-    expect(reactionFloorMs({ cadenceSeconds: 60, observeMsP95: null, interpretationMsP95: null, validationMsP95: null })).toBe(30_000);
+describe('reactionEstimate', () => {
+  it('pairs the mean wait (cadence/2) with p50 and the p95 wait (0.95 x cadence) with p95', () => {
+    expect(reactionEstimate({ cadenceSeconds: 120, pipelineMsP50: 2000, pipelineMsP95: 7000 })).toEqual({ meanMs: 62_000, p95Ms: 121_000 });
   });
 
-  it('adds observe/interpretation/validation p95 timings on top of cadence/2', () => {
-    const floor = reactionFloorMs({ cadenceSeconds: 120, observeMsP95: 2000, interpretationMsP95: 5000, validationMsP95: 100 });
-    expect(floor).toBe(60_000 + 2000 + 5000 + 100);
+  it('regression: the old "floor" (cadence/2 + p95s) understated the 120 s p95 by ~57 s', () => {
+    const oldFloor = 60_000 + 7_000 + 4_100; // run 3 as reported: ~71 s
+    const { p95Ms } = reactionEstimate({ cadenceSeconds: 120, pipelineMsP50: null, pipelineMsP95: 7_000 + 4_100 });
+    expect(p95Ms - oldFloor).toBe(54_000);
   });
 
-  it('scales with cadence', () => {
-    const a = reactionFloorMs({ cadenceSeconds: 60, observeMsP95: 0, interpretationMsP95: 0, validationMsP95: 0 });
-    const b = reactionFloorMs({ cadenceSeconds: 600, observeMsP95: 0, interpretationMsP95: 0, validationMsP95: 0 });
-    expect(b).toBe(a * 10);
+  it('treats missing pipeline timings as zero', () => {
+    expect(reactionEstimate({ cadenceSeconds: 60, pipelineMsP50: null, pipelineMsP95: null })).toEqual({ meanMs: 30_000, p95Ms: 57_000 });
+  });
+});
+
+describe('catchProbability', () => {
+  it('120 s polling, 60 s sell-out, 2 s pipeline, 20 s to buy: 38 of 120 s of arrival phase are caught', () => {
+    expect(catchProbability({ cadenceSeconds: 120, selloutSeconds: 60, pipelineMs: 2000, humanActionSeconds: 20 })).toBeCloseTo(38 / 120, 10);
+  });
+
+  it('is 0 when the pipeline plus the human alone exceed the sell-out', () => {
+    expect(catchProbability({ cadenceSeconds: 60, selloutSeconds: 30, pipelineMs: 12_000, humanActionSeconds: 20 })).toBe(0);
+  });
+
+  it('caps at 1 when the margin exceeds the cadence', () => {
+    expect(catchProbability({ cadenceSeconds: 10, selloutSeconds: 60, pipelineMs: 2000, humanActionSeconds: 20 })).toBe(1);
+  });
+
+  it('a model call on the alert path costs catch probability directly', () => {
+    const withoutModel = catchProbability({ cadenceSeconds: 120, selloutSeconds: 60, pipelineMs: 2000, humanActionSeconds: 20 });
+    const withOpus = catchProbability({ cadenceSeconds: 120, selloutSeconds: 60, pipelineMs: 2000 + 25_000, humanActionSeconds: 20 });
+    expect(withoutModel - withOpus).toBeCloseTo(25 / 120, 10);
+  });
+});
+
+describe('alertPipelineMs', () => {
+  it('sums slack, observe and the validation-to-alert gap', () => {
+    expect(alertPipelineMs({ schedulerSlackMs: 600, observeMs: 1900, alertAfterObserveMs: 5 })).toBe(2505);
+  });
+
+  it('ignores negative slack (a read that started before its plan) and a missing alert gap', () => {
+    expect(alertPipelineMs({ schedulerSlackMs: -40, observeMs: 1900, alertAfterObserveMs: null })).toBe(1900);
+  });
+
+  it('is null without slack or observe timing', () => {
+    expect(alertPipelineMs({ schedulerSlackMs: null, observeMs: 1900, alertAfterObserveMs: 5 })).toBeNull();
   });
 });
 

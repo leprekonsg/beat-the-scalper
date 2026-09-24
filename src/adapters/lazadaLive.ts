@@ -189,9 +189,11 @@ export const BUY_BOX_SELECTORS = ['.pdp-v2-block__product-detail', '[class*="blo
  * landed in body text. Each branch matches only once the buy box has actually reached a determinate
  * state: a rendered out-of-stock/sold-out quantity line, or an actionable purchase button.
  */
+/** The sold-out branches of `DECISIVE_STATE_SELECTOR`: a rendered out-of-stock/sold-out quantity line. */
+export const SOLD_OUT_STATE_SELECTOR = ['#module_quantity-input:has-text("out of stock")', '#module_quantity-input:has-text("sold out")'].join(', ');
+
 export const DECISIVE_STATE_SELECTOR = [
-  '#module_quantity-input:has-text("out of stock")',
-  '#module_quantity-input:has-text("sold out")',
+  SOLD_OUT_STATE_SELECTOR,
   '#module_add_to_cart button:has-text("Add to Cart")',
   '#module_add_to_cart button:has-text("Buy Now")',
 ].join(', ');
@@ -203,6 +205,20 @@ const SOLD_OUT_RE = /sold out|out of stock/i;
 // "Limited 1 year warranty" is not a purchase limit. At most 3 digits keeps the value a safe int.
 const PURCHASE_LIMIT_RE = /\blimit(?:ed)?\s+(?:to\s+)?(\d{1,3})\s*(?:per\b|pcs?\b|pieces?\b|units?\b|items?\b|boxe?s?\b|sets?\b)/i;
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+
+/**
+ * Listing artwork reference for the packaging cache: the og:image URL without query or fragment
+ * (CDN resize parameters vary per load; the path identifies the image). Null when absent or unparseable.
+ */
+export function normaliseArtworkRef(content: string | null): string | null {
+  if (!content) return null;
+  try {
+    const u = new URL(content.trim().startsWith('//') ? `https:${content.trim()}` : content.trim());
+    return `${u.hostname}${u.pathname}`;
+  } catch {
+    return null;
+  }
+}
 
 /** Body text stored as evidence is capped and never carries an address from a signed-in header. */
 function redactExcerpt(text: string): string {
@@ -243,6 +259,13 @@ export interface LazadaLiveObservationAdapterOptions {
    * Default 4000ms (probe default).
    */
   settleMs?: number;
+  /**
+   * When readiness was reached by a purchase button rather than a sold-out line, how long to keep
+   * waiting for a sold-out line before parsing (see `SOLD_OUT_STATE_SELECTOR`). Guards against a
+   * false AVAILABLE when the buttons render before the stock line; costs at most this much on a true
+   * restock. Default 1000ms; 0 disables.
+   */
+  purchaseConfirmMs?: number;
 }
 
 export class LazadaLiveObservationAdapter implements ObservationAdapter {
@@ -255,6 +278,7 @@ export class LazadaLiveObservationAdapter implements ObservationAdapter {
   private readonly onEvidence: ((e: Evidence) => void) | undefined;
   private readonly evidenceDir: string;
   private readonly settleMs: number;
+  private readonly purchaseConfirmMs: number;
 
   constructor(opts: LazadaLiveObservationAdapterOptions) {
     if (!opts.approvedBy || opts.approvedBy.trim().length === 0) {
@@ -275,6 +299,7 @@ export class LazadaLiveObservationAdapter implements ObservationAdapter {
     this.now = opts.now ?? (() => new Date());
     this.onEvidence = opts.onEvidence;
     this.settleMs = opts.settleMs ?? 4000;
+    this.purchaseConfirmMs = opts.purchaseConfirmMs ?? 1000;
     this.evidenceDir = join(opts.dataDir ? resolve(opts.dataDir) : resolve(process.cwd(), 'data'), 'evidence');
   }
 
@@ -418,8 +443,15 @@ export class LazadaLiveObservationAdapter implements ObservationAdapter {
     // renders between the deadline and the parse is still valid evidence, and the scoped rules below
     // correctly yield UNKNOWN when nothing decisive is actually present. `readiness` records which
     // happened so a live run tells us how often the wait is actually needed.
+    //
+    // A purchase button alone is not trusted at once: the stock line can land after the buttons
+    // (Run 6), and a sold-out page read in that gap would parse as AVAILABLE and fire a false restock
+    // alert. So when no sold-out line is present yet, wait up to `purchaseConfirmMs` more for one.
+    // `purchaseConfirm` records the outcome: 'sold_out_appeared' is the race this guards against.
     let readiness: 'decisive' | 'timeout' = 'timeout';
     let readinessMs = 0;
+    let purchaseConfirm: 'not_needed' | 'held' | 'sold_out_appeared' | 'disabled' = 'not_needed';
+    let purchaseConfirmMs = 0;
     if (navError === null) {
       const readinessStart = performance.now();
       try {
@@ -427,6 +459,23 @@ export class LazadaLiveObservationAdapter implements ObservationAdapter {
         readiness = 'decisive';
       } catch {
         readiness = 'timeout';
+      }
+      if (readiness === 'decisive') {
+        const soldOutNow = await this.page.locator(SOLD_OUT_STATE_SELECTOR).count().catch(() => 0);
+        if (soldOutNow === 0) {
+          if (this.purchaseConfirmMs <= 0) {
+            purchaseConfirm = 'disabled';
+          } else {
+            const confirmStart = performance.now();
+            try {
+              await this.page.waitForSelector(SOLD_OUT_STATE_SELECTOR, { timeout: this.purchaseConfirmMs, state: 'visible' });
+              purchaseConfirm = 'sold_out_appeared';
+            } catch {
+              purchaseConfirm = 'held';
+            }
+            purchaseConfirmMs = performance.now() - confirmStart;
+          }
+        }
       }
       readinessMs = performance.now() - readinessStart;
     }
@@ -450,7 +499,7 @@ export class LazadaLiveObservationAdapter implements ObservationAdapter {
     // failure (page closed mid-parse) or a value the domain schema rejects is reported as an
     // UNKNOWN observation, never thrown into the worker tick.
     try {
-      return await this.parseLoadedPage(req, { capturedAt, evidenceId, loadMs, response, readiness, readinessMs });
+      return await this.parseLoadedPage(req, { capturedAt, evidenceId, loadMs, response, readiness, readinessMs, purchaseConfirm, purchaseConfirmMs });
     } catch (err) {
       const parseError = describeError(err);
       const snapshotRef = await this.captureScreenshot(evidenceId);
@@ -468,6 +517,8 @@ export class LazadaLiveObservationAdapter implements ObservationAdapter {
           error: parseError,
           readiness,
           readinessMs,
+          purchaseConfirm,
+          purchaseConfirmMs,
         },
         snapshotRef,
       });
@@ -484,9 +535,11 @@ export class LazadaLiveObservationAdapter implements ObservationAdapter {
       response: LazadaLiveResponse | null;
       readiness: 'decisive' | 'timeout';
       readinessMs: number;
+      purchaseConfirm: 'not_needed' | 'held' | 'sold_out_appeared' | 'disabled';
+      purchaseConfirmMs: number;
     },
   ): Promise<Observation> {
-    const { capturedAt, evidenceId, loadMs, response, readiness, readinessMs } = ctx;
+    const { capturedAt, evidenceId, loadMs, response, readiness, readinessMs, purchaseConfirm, purchaseConfirmMs } = ctx;
     const parseStart = performance.now();
     const finalUrl = this.safeUrl();
     const httpStatus = response ? response.status() : null;
@@ -508,7 +561,7 @@ export class LazadaLiveObservationAdapter implements ObservationAdapter {
         pageRevision: null,
         targetRef: req.intent.target.retailerProductId,
         variantRef: req.intent.target.variantId,
-        observedFields: { loadMs, parseMs, httpStatus, finalUrl, pageTitle: title, accessControl: classification.accessControl, bodyTextExcerpt, readiness, readinessMs },
+        observedFields: { loadMs, parseMs, httpStatus, finalUrl, pageTitle: title, accessControl: classification.accessControl, bodyTextExcerpt, readiness, readinessMs, purchaseConfirm, purchaseConfirmMs },
         snapshotRef,
       });
       return this.unknownObservation(req.missionId, capturedAt, classification.error, classification.accessControl, classification.retryAfterSeconds, evidenceId, evidence);
@@ -527,7 +580,7 @@ export class LazadaLiveObservationAdapter implements ObservationAdapter {
         pageRevision: null,
         targetRef: req.intent.target.retailerProductId,
         variantRef: req.intent.target.variantId,
-        observedFields: { loadMs, parseMs, httpStatus, finalUrl, pageTitle: title, productTitle, readiness, readinessMs, bodyTextExcerpt },
+        observedFields: { loadMs, parseMs, httpStatus, finalUrl, pageTitle: title, productTitle, readiness, readinessMs, purchaseConfirm, purchaseConfirmMs, bodyTextExcerpt },
         snapshotRef,
       });
       return this.unknownObservation(
@@ -574,6 +627,11 @@ export class LazadaLiveObservationAdapter implements ObservationAdapter {
     const purchaseLimit = purchaseLimitMatch ? Number.parseInt(purchaseLimitMatch[1]!, 10) : null;
 
     const packagingCondition = classifyPackaging(bodyText);
+
+    // Keys the worker's packaging cache (the wrap notice is artwork-only). count() first: getAttribute on a
+    // missing element would wait for Playwright's default timeout.
+    const ogImage = this.page.locator('meta[property="og:image"]').first();
+    const artworkRef = (await ogImage.count()) > 0 ? normaliseArtworkRef(await ogImage.getAttribute('content', { timeout: 1000 }).catch(() => null)) : null;
 
     // On a verified out-of-stock page, "Add to Cart"/"Buy Now" are absent (the only button under
     // `#module_add_to_cart` is "Add to Wishlist") and a "Quantity: ... Out of stock" line sits in
@@ -627,6 +685,7 @@ export class LazadaLiveObservationAdapter implements ObservationAdapter {
       packagingCondition,
       packagingEvidenceRegion: null,
       purchaseLimit,
+      artworkRef,
     };
 
     const pageRevision = createHash('sha256')
@@ -655,11 +714,14 @@ export class LazadaLiveObservationAdapter implements ObservationAdapter {
         purchaseLimit,
         availability,
         packagingCondition,
+        artworkRef,
         bodyTextExcerpt,
         buyBoxSelector,
         soldOutTextOutsideBuyBox,
         readiness,
         readinessMs,
+        purchaseConfirm,
+        purchaseConfirmMs,
       },
       snapshotRef,
     });

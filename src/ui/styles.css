@@ -1026,6 +1026,24 @@ tr:last-child td {
   border-color: rgba(30, 77, 216, 0.4);
 }
 
+.banner-go {
+  background: var(--pine-tint);
+  color: var(--ink);
+  border-color: var(--pine);
+  border-width: 2px;
+  font-size: var(--fs-1);
+}
+
+.restock-alert-checks {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: var(--fs-0);
+}
+
+.restock-alert-enable {
+  margin-bottom: 12px;
+}
+
 .banner-review {
   background: var(--amber-tint);
   color: var(--amber-deep);

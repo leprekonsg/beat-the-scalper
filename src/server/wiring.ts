@@ -35,6 +35,7 @@ import type { MissionRow, Store } from '../storage/db.ts';
 import type { HealthSnapshot, MissionView, WorkerApi } from '../worker/types.ts';
 import type { ObservationAdapter, PreparationExecutor } from '../adapters/types.ts';
 import { LazadaObservationAdapter } from '../adapters/lazada.ts';
+import { createNotifier } from '../worker/notifier.ts';
 
 // Real signature (src/agent/extract.ts): extractAnnouncement(client, input) -> Promise<TaskResult<AnnouncementExtraction>>.
 type ExtractAnnouncementFn = (
@@ -392,6 +393,7 @@ export async function buildWiring(opts: { store: Store; clock: Clock; config: Ap
       executor,
       interpreter,
       apiReadiness: config.modelPath,
+      notifier: createNotifier({ webhookUrl: config.alertWebhookUrl }),
       // worker/worker.ts takes a *function* here (`browserReadiness?: () => 'ready' | 'not_started' | 'failed'`),
       // not a static value, so browser readiness can change after construction (e.g. if the demo browser dies).
       browserReadiness: () => (config.mode === 'demo' ? (capabilities.demoBrowser === 'ready' ? 'ready' : 'failed') : 'not_started'),

@@ -12,6 +12,7 @@ import { ObservationPocket } from './components/ObservationPocket.tsx';
 import { ActionPocket } from './components/ActionPocket.tsx';
 import { Timeline } from './components/Timeline.tsx';
 import { Footer } from './components/Footer.tsx';
+import { RestockAlert } from './components/RestockAlert.tsx';
 
 const POLL_MS = 1500;
 
@@ -83,6 +84,8 @@ export function App(): ReactElement {
             {error}
           </div>
         ) : null}
+
+        {connected ? <RestockAlert events={stateResp?.recentEvents ?? null} nowMs={serverNowMs} /> : null}
 
         {!connected ? (
           checkedInitial ? (

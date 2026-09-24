@@ -14,6 +14,8 @@ import { LOCKED_STATES, OBSERVING_STATES, TERMINAL_STATES, stopRequestOutcome } 
 import type { AssessmentBinding, CartLine, EligibilityResult } from '../domain/policy.ts';
 import { assessmentIsCurrent, evaluateEligibility, planCart } from '../domain/policy.ts';
 import { OriginRateLimiter, planNextCheck, recoverAfterDowntime, transientBackoffMs } from '../domain/scheduling.ts';
+import { packagingCacheApplies, packagingCacheNeedsRefresh, restockAlertDecision } from '../domain/restockAlert.ts';
+import type { PackagingCacheEntry, RestockAlertDecision } from '../domain/restockAlert.ts';
 import type { CadenceLabel, SchedulePlan } from '../domain/scheduling.ts';
 import { VirtualClock } from '../domain/time.ts';
 import type { Clock } from '../domain/time.ts';
@@ -22,6 +24,7 @@ import type { MissionRow } from '../storage/db.ts';
 import { isDemoSubmissionExecutor } from '../adapters/types.ts';
 import type { CartState, ObservationAdapter, PreparationExecutor } from '../adapters/types.ts';
 import type { HealthSnapshot, LatencyMarks, MissionView, WorkerApi } from './types.ts';
+import type { RestockNotification, RestockNotifier } from './notifier.ts';
 
 /**
  * Implemented by the agent layer. The worker calls this only when packaging is unreadable, the page
@@ -51,6 +54,26 @@ export interface WorkerDeps {
   maxEvidenceAgeMs?: number;
   staleObservationMs?: number;
   leaseMs?: number;
+  /** Receives the restock alert (and any retraction). Called without awaiting; see notifier.ts. */
+  notifier?: RestockNotifier | null;
+  /** How long an interpreted packaging condition may resolve an unreadable notice. Default 30 min. */
+  packagingCacheMaxAgeMs?: number;
+  /**
+   * While a restock is in progress (last clean read AVAILABLE) on an observe mission, read again
+   * after this long instead of the full cadence, so the episode's end -- the sell-out -- is timed to
+   * this resolution (`restock.ended`). Still subject to the origin limiter. Null (default) keeps the
+   * cadence.
+   */
+  followUpWhileAvailableMs?: number | null;
+}
+
+/** A run of AVAILABLE reads, stored per mission until a clean non-AVAILABLE read ends it. */
+interface RestockEpisode {
+  /** The last clean read before the episode (the restock began after it); null when there was none. */
+  startedAfter: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  availableReads: number;
 }
 
 /** States recovered via reconciliation rather than fresh observation (A19-A21). */
@@ -74,6 +97,12 @@ export class Worker implements WorkerApi {
   private readonly staleObservationMs: number;
   private readonly leaseMs: number;
   private readonly rateLimiter: OriginRateLimiter;
+  private readonly notifier: RestockNotifier | null;
+  private readonly packagingCacheMaxAgeMs: number;
+  private readonly followUpWhileAvailableMs: number | null;
+  /** Notification deliveries and packaging refreshes still running; stop() waits for them. */
+  private readonly backgroundTasks = new Set<Promise<void>>();
+  private readonly packagingRefreshInFlight = new Set<string>();
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
@@ -96,6 +125,9 @@ export class Worker implements WorkerApi {
     this.staleObservationMs = deps.staleObservationMs ?? 60000;
     this.leaseMs = deps.leaseMs ?? 15000;
     this.rateLimiter = new OriginRateLimiter(this.policy.maxObservationsPerOriginPerMinute);
+    this.notifier = deps.notifier ?? null;
+    this.packagingCacheMaxAgeMs = deps.packagingCacheMaxAgeMs ?? 30 * 60_000;
+    this.followUpWhileAvailableMs = deps.followUpWhileAvailableMs ?? null;
   }
 
   // ---------------------------------------------------------------------
@@ -273,7 +305,9 @@ export class Worker implements WorkerApi {
     let deferredRetryAtMs: number | null = null;
     try {
       if (this.rateLimiter.tryAcquire(this.adapter.origin, now.getTime())) {
-        this.store.appendEvent({ missionId: mission.id, type: 'observation.started', at: this.clock.now().toISOString(), provenance: this.adapter.provenance, payload: { origin: this.adapter.origin } });
+        // plannedAt is the instant that made this read due (cadence, signal import, or resume), so scheduler
+        // slack is computed from the event log alone: started.at - plannedAt.
+        this.store.appendEvent({ missionId: mission.id, type: 'observation.started', at: this.clock.now().toISOString(), provenance: this.adapter.provenance, payload: { origin: this.adapter.origin, plannedAt: mission.nextCheckAt } });
         obs = await this.adapter.observeTarget({ missionId: mission.id, intent: mission.intent, now: this.clock.now().toISOString() });
         this.store.putObservation(obs);
         const endIso = this.clock.now().toISOString();
@@ -296,6 +330,7 @@ export class Worker implements WorkerApi {
           this.store.patchMission(mission.id, { pauseReason: obs.accessControl }, endIso);
           this.store.appendEvent({ missionId: mission.id, type: 'access_control.paused', at: endIso, provenance: obs.provenance, payload: { accessControl: obs.accessControl } });
         } else if (obs.accessControl === 'none') {
+          if (obs.error === null) this.trackRestockEpisode(mission, obs);
           const cur = this.store.getMission(mission.id)!;
           if ((priorAvailability === 'UNAVAILABLE' || priorAvailability === 'UNKNOWN') && obs.availability === 'AVAILABLE' && cur.state === 'WATCHING') {
             this.store.transition(mission.id, 'CANDIDATE', endIso, { observationId: obs.observationId }, obs.provenance);
@@ -303,6 +338,8 @@ export class Worker implements WorkerApi {
           } else if (obs.availability === 'UNAVAILABLE' && cur.state === 'CANDIDATE') {
             this.store.transition(mission.id, 'WATCHING', endIso, { observationId: obs.observationId, reason: 'stock disappeared before validation' }, obs.provenance);
           }
+          // While out of stock, interpret the listing artwork ahead of time so a restock never waits on a model.
+          if (!becameCandidate && obs.error === null) this.maybeRefreshPackaging(mission.id, obs);
         }
         // rate_limited and unsupported_layout: no forced transition here; scheduling below honours retryAfterSeconds,
         // and unsupported_layout may be resolved by the interpreter during candidate validation.
@@ -337,6 +374,14 @@ export class Worker implements WorkerApi {
         // plan.nextCheckAt, e.g. the mission expired in the same instant).
         nextCheckAt = new Date(plan.nextCheckAt !== null ? Math.min(deferredRetryAtMs, Date.parse(plan.nextCheckAt)) : deferredRetryAtMs).toISOString();
         this.lastPlan = { ...plan, labels: [...plan.labels, 'Deferred: origin limit'] };
+      } else if (this.followUpWhileAvailableMs !== null && finalMission.intent.authority === 'observe' && (finalMission.state === 'WATCHING' || finalMission.state === 'CANDIDATE') && this.readRestockEpisode(mission.id) !== null) {
+        // CANDIDATE included: the first AVAILABLE read is scheduled here, before handleCandidate returns an
+        // observe mission to WATCHING.
+        const followUpMs = this.clock.now().getTime() + this.followUpWhileAvailableMs;
+        if (plan.nextCheckAt !== null && followUpMs < Date.parse(plan.nextCheckAt)) {
+          nextCheckAt = new Date(followUpMs).toISOString();
+          this.lastPlan = { ...plan, labels: [...plan.labels, 'Follow-up: restock in progress'] };
+        }
       }
       this.store.patchMission(mission.id, { nextCheckAt }, this.clock.now().toISOString());
     }
@@ -385,6 +430,54 @@ export class Worker implements WorkerApi {
     return { verdict, checks, preparationPermitted, requiresUserReview };
   }
 
+  private readRestockEpisode(missionId: string): RestockEpisode | null {
+    const raw = this.store.getSetting(`mission.${missionId}.restockEpisode`);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as RestockEpisode;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Times how long a restock stayed in stock, from clean reads only. The true duration lies between
+   * lastSeenAt - firstSeenAt (it was seen that long) and endedBy - startedAfter (it cannot have been
+   * longer), so `restock.ended` carries both bounds rather than a single guessed value.
+   */
+  private trackRestockEpisode(mission: MissionRow, obs: Observation): void {
+    const key = `mission.${mission.id}.restockEpisode`;
+    const episode = this.readRestockEpisode(mission.id);
+    if (obs.availability === 'AVAILABLE') {
+      if (episode === null) {
+        const prev = mission.lastSuccessfulObservationId ? this.store.getObservation(mission.lastSuccessfulObservationId) : null;
+        const next: RestockEpisode = { startedAfter: prev?.capturedAt ?? null, firstSeenAt: obs.capturedAt, lastSeenAt: obs.capturedAt, availableReads: 1 };
+        this.store.setSetting(key, JSON.stringify(next));
+      } else {
+        this.store.setSetting(key, JSON.stringify({ ...episode, lastSeenAt: obs.capturedAt, availableReads: episode.availableReads + 1 }));
+      }
+      return;
+    }
+    if (obs.availability !== 'UNAVAILABLE' || episode === null) return;
+    const seenMs = Date.parse(episode.lastSeenAt) - Date.parse(episode.firstSeenAt);
+    const maxMs = Date.parse(obs.capturedAt) - Date.parse(episode.startedAfter ?? episode.firstSeenAt);
+    this.store.appendEvent({
+      missionId: mission.id,
+      type: 'restock.ended',
+      at: this.clock.now().toISOString(),
+      provenance: obs.provenance,
+      payload: {
+        ...episode,
+        endedBy: obs.capturedAt,
+        endedObservationId: obs.observationId,
+        minDurationMs: seenMs,
+        maxDurationMs: maxMs,
+        startBounded: episode.startedAfter !== null,
+      },
+    });
+    this.store.setSetting(key, '');
+  }
+
   private async handleCandidate(mission: MissionRow, now: Date): Promise<void> {
     this.currentAction = 'validating';
     let nowIso = now.toISOString();
@@ -398,26 +491,63 @@ export class Worker implements WorkerApi {
       return;
     }
     let obs = this.store.getObservation(obsId)!;
+    const extraEvidenceIds: string[] = [];
+
+    // Restock path: an artwork-only packaging notice is resolved from the assessment made while watching,
+    // not by a model call here. The cached condition is re-checked by evaluateEligibility like any other.
+    const cached = this.readPackagingCache(mission.id);
+    const cacheCheck = packagingCacheApplies(cached, obs, this.clock.now(), this.packagingCacheMaxAgeMs);
+    if (cacheCheck.applies && cached && obs.offer) {
+      obs = { ...obs, offer: { ...obs.offer, packagingCondition: cached.condition } };
+      extraEvidenceIds.push(cached.evidenceId);
+      this.store.appendEvent({
+        missionId: mission.id,
+        type: 'packaging.cache_applied',
+        at: this.clock.now().toISOString(),
+        provenance: cached.provenance,
+        payload: { condition: cached.condition, evidenceId: cached.evidenceId, assessedAt: cached.assessedAt, ageMs: cacheCheck.ageMs },
+      });
+    } else if (obs.offer?.packagingCondition === 'unreadable') {
+      this.store.appendEvent({ missionId: mission.id, type: 'packaging.cache_missed', at: this.clock.now().toISOString(), provenance: this.provFor(cur), payload: { reason: cacheCheck.applies ? 'no entry' : cacheCheck.reason } });
+    }
     let result = this.applyAcceptedConditionOverride(cur, obs, evaluateEligibility(cur.intent, obs, { now: this.clock.now(), maxEvidenceAgeMs: this.maxEvidenceAgeMs }));
 
+    // Restocks sell out within a minute and the human buys on live retailers: alert now, from deterministic
+    // checks only, before any model call. Unresolved checks travel with the alert as "check before paying".
+    const alert = this.alertOnCandidate(cur, obs, result);
+
     const packagingVerdict = result.checks.find((c) => c.check === 'packaging')?.verdict;
-    const needsInterpretation = obs.offer?.packagingCondition === 'unreadable' || obs.accessControl === 'unsupported_layout' || packagingVerdict === 'unknown';
-    let extraEvidenceIds: string[] = [];
+    const needsInterpretation = !cacheCheck.applies && (obs.offer?.packagingCondition === 'unreadable' || obs.accessControl === 'unsupported_layout' || packagingVerdict === 'unknown');
     if (needsInterpretation && this.interpreter) {
       const evidence = this.store.getEvidence(obs.evidenceId);
+      const startMs = performance.now();
       const outcome = await this.interpreter.assess({ intent: cur.intent, observation: obs, evidence });
+      const durationMs = Math.round(performance.now() - startMs);
       const afterInterp = this.store.getMission(mission.id);
       if (!afterInterp || afterInterp.generation !== cur.generation) throw new StaleGenerationError('mission changed during interpretation');
       nowIso = this.clock.now().toISOString();
+      this.store.appendEvent({
+        missionId: mission.id,
+        type: 'interpretation.completed',
+        at: nowIso,
+        provenance: outcome.provenance,
+        payload: { observationId: obs.observationId, ok: outcome.ok, durationMs, packagingCondition: outcome.ok ? outcome.assessment.packagingCondition : null },
+      });
       if (!outcome.ok) {
         this.store.appendEvent({ missionId: mission.id, type: 'interpretation.blocked', at: nowIso, provenance: outcome.provenance, payload: { reason: outcome.reason } });
+        if (cur.intent.authority === 'observe') {
+          // Observe authority never acts, so pausing would only stop watching while the user buys from the alert.
+          this.store.transition(mission.id, 'WATCHING', nowIso, { reason: 'interpretation unavailable; observe authority keeps watching' }, outcome.provenance);
+          return;
+        }
         this.store.transition(mission.id, 'PAUSED', nowIso, { pauseReason: 'user_review_required' }, outcome.provenance);
         this.store.patchMission(mission.id, { pauseReason: 'user_review_required' }, nowIso);
         return;
       }
-      extraEvidenceIds = outcome.assessment.evidenceIds;
+      extraEvidenceIds.push(...outcome.assessment.evidenceIds);
       const tightenedOffer = obs.offer ? { ...obs.offer, packagingCondition: outcome.assessment.packagingCondition } : obs.offer;
       obs = { ...obs, offer: tightenedOffer };
+      this.writePackagingCache(mission.id, obs, outcome.provenance);
       result = this.applyAcceptedConditionOverride(cur, obs, evaluateEligibility(cur.intent, obs, { now: this.clock.now(), maxEvidenceAgeMs: this.maxEvidenceAgeMs }));
     }
 
@@ -425,6 +555,8 @@ export class Worker implements WorkerApi {
     const binding: AssessmentBinding = { intentRevision: cur.intent.revision, pageRevision: obs.pageRevision, evidenceIds: Array.from(new Set([obs.evidenceId, ...extraEvidenceIds])) };
     this.store.setSetting(`mission.${mission.id}.assessment`, JSON.stringify(binding));
     this.store.appendEvent({ missionId: mission.id, type: 'validation.completed', at: nowIso, provenance: obs.provenance, payload: { verdict: result.verdict, checks: result.checks } });
+
+    if (alert.go && result.verdict === 'ineligible') this.retractAlert(cur, obs, result);
 
     if (result.verdict === 'ineligible') {
       this.store.appendEvent({ missionId: mission.id, type: 'candidate.rejected', at: nowIso, provenance: obs.provenance, payload: { checks: result.checks } });
@@ -437,6 +569,12 @@ export class Worker implements WorkerApi {
       return;
     }
     if (result.requiresUserReview) {
+      if (cur.intent.authority === 'observe') {
+        // The review belongs to the user at purchase time (it is listed in the alert); BTS keeps watching.
+        this.store.appendEvent({ missionId: mission.id, type: 'condition.review_requested', at: nowIso, provenance: obs.provenance, payload: { checks: result.checks } });
+        this.store.transition(mission.id, 'WATCHING', nowIso, { reason: 'review listed in the restock alert; observe authority keeps watching' }, obs.provenance);
+        return;
+      }
       this.store.transition(mission.id, 'PAUSED', nowIso, { pauseReason: 'user_review_required' }, obs.provenance);
       this.store.patchMission(mission.id, { pauseReason: 'user_review_required' }, nowIso);
       this.store.appendEvent({ missionId: mission.id, type: 'condition.review_requested', at: nowIso, provenance: obs.provenance, payload: { checks: result.checks } });
@@ -456,6 +594,121 @@ export class Worker implements WorkerApi {
     }
 
     this.store.transition(mission.id, 'WATCHING', nowIso, { reason: 'validated but not actionable under current authority/executor' }, obs.provenance);
+  }
+
+  // ---------------------------------------------------------------------
+  // Restock alert + packaging cache
+  // ---------------------------------------------------------------------
+  private alertOnCandidate(mission: MissionRow, obs: Observation, result: EligibilityResult): RestockAlertDecision {
+    const decision = restockAlertDecision(mission.intent, obs, result);
+    const at = this.clock.now().toISOString();
+    if (!decision.go) {
+      this.store.appendEvent({ missionId: mission.id, type: 'restock_alert.suppressed', at, provenance: obs.provenance, payload: { observationId: obs.observationId, blockers: decision.blockers } });
+      return decision;
+    }
+    this.store.appendEvent({
+      missionId: mission.id,
+      type: 'restock_alert.sent',
+      at,
+      provenance: obs.provenance,
+      payload: { observationId: obs.observationId, headline: decision.headline, checkBeforePaying: decision.checkBeforePaying, productUrl: decision.productUrl, notifier: this.notifier?.name ?? null },
+    });
+    this.deliver({ kind: 'go', missionId: mission.id, headline: decision.headline, details: decision.checkBeforePaying.map((d) => `Check before paying: ${d}`), productUrl: decision.productUrl, at });
+    return decision;
+  }
+
+  private retractAlert(mission: MissionRow, obs: Observation, result: EligibilityResult): void {
+    const reasons = result.checks.filter((c) => c.verdict === 'ineligible').map((c) => c.detail);
+    const at = this.clock.now().toISOString();
+    this.store.appendEvent({ missionId: mission.id, type: 'restock_alert.retracted', at, provenance: obs.provenance, payload: { observationId: obs.observationId, reasons } });
+    this.deliver({ kind: 'retract', missionId: mission.id, headline: `Do not buy: ${obs.offer?.title ?? mission.intent.target.description}`, details: reasons, productUrl: mission.intent.target.productUrl, at });
+  }
+
+  /** Fire-and-forget delivery; the outcome is recorded as an event, never thrown into the tick. */
+  private deliver(n: RestockNotification): void {
+    if (!this.notifier) return;
+    const notifier = this.notifier;
+    const record = (type: string, payload: Record<string, unknown>): void => {
+      try {
+        this.store.appendEvent({ missionId: n.missionId, type, at: this.clock.now().toISOString(), provenance: 'manual_input', payload: { kind: n.kind, notifier: notifier.name, ...payload } });
+      } catch {
+        /* store closed during shutdown; the delivery outcome is lost, not the alert */
+      }
+    };
+    const startMs = performance.now();
+    this.track(
+      notifier.notify(n).then(
+        () => record('restock_alert.delivered', { durationMs: Math.round(performance.now() - startMs) }),
+        (err: unknown) => record('restock_alert.delivery_failed', { error: err instanceof Error ? err.message : String(err) }),
+      ),
+    );
+  }
+
+  private track(task: Promise<void>): void {
+    this.backgroundTasks.add(task);
+    void task.finally(() => this.backgroundTasks.delete(task));
+  }
+
+  private readPackagingCache(missionId: string): PackagingCacheEntry | null {
+    const raw = this.store.getSetting(`mission.${missionId}.packagingCache`);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as PackagingCacheEntry;
+    } catch {
+      return null;
+    }
+  }
+
+  private writePackagingCache(missionId: string, obs: Observation, provenance: Provenance): void {
+    const offer = obs.offer;
+    if (!offer || offer.packagingCondition === 'unreadable' || !offer.retailerProductId || !offer.variantId) return;
+    const entry: PackagingCacheEntry = {
+      condition: offer.packagingCondition,
+      evidenceId: obs.evidenceId,
+      observationId: obs.observationId,
+      assessedAt: this.clock.now().toISOString(),
+      retailerProductId: offer.retailerProductId,
+      variantId: offer.variantId,
+      artworkRef: offer.artworkRef ?? null,
+      provenance,
+    };
+    this.store.setSetting(`mission.${missionId}.packagingCache`, JSON.stringify(entry));
+  }
+
+  /** Background interpretation of a watching observation whose page text cannot show packaging. */
+  private maybeRefreshPackaging(missionId: string, obs: Observation): void {
+    const interpreter = this.interpreter;
+    if (!interpreter || this.packagingRefreshInFlight.has(missionId)) return;
+    if (!packagingCacheNeedsRefresh(this.readPackagingCache(missionId), obs, this.clock.now(), this.packagingCacheMaxAgeMs)) return;
+    this.packagingRefreshInFlight.add(missionId);
+    const record = (type: string, provenance: Provenance, payload: Record<string, unknown>): void => {
+      try {
+        this.store.appendEvent({ missionId, type, at: this.clock.now().toISOString(), provenance, payload: { observationId: obs.observationId, ...payload } });
+      } catch {
+        /* store closed during shutdown */
+      }
+    };
+    const run = async (): Promise<void> => {
+      const mission = this.store.getMission(missionId);
+      if (!mission) return;
+      const startMs = performance.now();
+      const outcome = await interpreter.assess({ intent: mission.intent, observation: obs, evidence: this.store.getEvidence(obs.evidenceId) });
+      const durationMs = Math.round(performance.now() - startMs);
+      if (!outcome.ok || outcome.assessment.packagingCondition === 'unreadable') {
+        record('packaging.cache_refresh_failed', outcome.provenance, { durationMs, reason: outcome.ok ? 'interpreter could not read the notice' : outcome.reason });
+        return;
+      }
+      const resolved: Observation = obs.offer ? { ...obs, offer: { ...obs.offer, packagingCondition: outcome.assessment.packagingCondition } } : obs;
+      this.writePackagingCache(missionId, resolved, outcome.provenance);
+      record('packaging.cache_refreshed', outcome.provenance, { durationMs, condition: outcome.assessment.packagingCondition, evidenceId: obs.evidenceId, artworkRef: obs.offer?.artworkRef ?? null });
+    };
+    this.track(
+      run()
+        .catch((err: unknown) => record('packaging.cache_refresh_failed', this.adapter.provenance, { reason: err instanceof Error ? err.message : String(err) }))
+        .finally(() => {
+          this.packagingRefreshInFlight.delete(missionId);
+        }),
+    );
   }
 
   // ---------------------------------------------------------------------
@@ -904,5 +1157,6 @@ export class Worker implements WorkerApi {
     while (this.ticking) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
+    await Promise.allSettled([...this.backgroundTasks]);
   }
 }

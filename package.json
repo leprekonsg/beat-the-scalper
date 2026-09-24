@@ -26,7 +26,8 @@
     "eval:gemini": "tsx scripts/eval-fable.ts --provider gemini",
     "demo:run": "tsx scripts/run-demo-flows.ts",
     "lazada:gemini-observe": "tsx scripts/lazada-gemini-observe.ts",
-    "lazada:live-reaction": "tsx scripts/lazada-live-reaction.ts"
+    "lazada:live-reaction": "tsx scripts/lazada-live-reaction.ts",
+    "alert:drill": "tsx scripts/alert-drill.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.125.0",
