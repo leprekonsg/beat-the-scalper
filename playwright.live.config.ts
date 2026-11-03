@@ -24,5 +24,5 @@ export default defineConfig({
     video: 'off',
     trace: 'off',
   },
-  projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
+  projects: [{ name: 'chromium', use: { browserName: 'chromium', channel: 'chrome', launchOptions: { chromiumSandbox: true } } }],
 });

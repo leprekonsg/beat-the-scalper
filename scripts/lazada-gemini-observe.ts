@@ -89,6 +89,8 @@ const GOAL =
 
 const context = await chromium.launchPersistentContext(profileDir, {
   headless: true,
+  channel: 'chrome',
+  chromiumSandbox: true,
   viewport: { width: 1280, height: 900 },
   locale: 'en-SG',
   timezoneId: 'Asia/Singapore',

@@ -74,7 +74,7 @@ export async function createDemoBrowser(opts: CreateDemoBrowserOptions): Promise
   mkdirSync(profileDir, { recursive: true });
   const allowedOrigin = new URL(opts.storeOrigin).origin;
 
-  const context = await chromium.launchPersistentContext(profileDir, { headless: opts.headless ?? true });
+  const context = await chromium.launchPersistentContext(profileDir, { headless: opts.headless ?? true, channel: 'chrome', chromiumSandbox: true });
 
   await context.route('**/*', async (route) => {
     const requestUrl = route.request().url();

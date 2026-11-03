@@ -29,5 +29,5 @@ export default defineConfig({
     viewport: { width: 1440, height: 900 },
     actionTimeout: 15_000,
   },
-  projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
+  projects: [{ name: 'chromium', use: { browserName: 'chromium', channel: 'chrome', launchOptions: { chromiumSandbox: true } } }],
 });

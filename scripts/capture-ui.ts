@@ -95,7 +95,7 @@ async function main(): Promise<void> {
   if (!existsSync(tokenPath)) throw new Error(`session token not found at ${tokenPath}`);
   const token = readFileSync(tokenPath, 'utf8').trim();
 
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, channel: 'chrome', chromiumSandbox: true });
   const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
   const page = await desktop.newPage();
   page.on('pageerror', (err) => console.error('[page] error:', err.message));

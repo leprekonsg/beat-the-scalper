@@ -109,13 +109,13 @@ export function liveObserveIntent(input: {
 
 /** Headless Chromium with the viewport/locale every live read so far used. `profileDir` null = fresh non-persistent context. */
 export async function launchLiveBrowser(opts: { profileDir: string | null }): Promise<{ page: LazadaLivePage; close: () => Promise<void> }> {
-  const contextOptions = { headless: true, viewport: { width: 1280, height: 900 }, locale: 'en-SG', timezoneId: 'Asia/Singapore' };
+  const contextOptions = { headless: true, channel: 'chrome', chromiumSandbox: true, viewport: { width: 1280, height: 900 }, locale: 'en-SG', timezoneId: 'Asia/Singapore' };
   if (opts.profileDir) {
     const context = await chromium.launchPersistentContext(opts.profileDir, contextOptions);
     const page = context.pages()[0] ?? (await context.newPage());
     return { page, close: () => context.close() };
   }
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, channel: 'chrome', chromiumSandbox: true });
   const context = await browser.newContext({ viewport: contextOptions.viewport, locale: contextOptions.locale, timezoneId: contextOptions.timezoneId });
   const page = await context.newPage();
   return {

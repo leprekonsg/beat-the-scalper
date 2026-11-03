@@ -22,7 +22,7 @@ One screen, no chat. The mission sits in the centre pocket with its state, prove
 
 - Node 22.13 or newer (uses `node:sqlite`). Developed on 22.17.1.
 - npm 11. Dependencies are pinned exactly; `npm ci` respects the lockfile.
-- Playwright Chromium: `npx playwright install chromium` once.
+- Google Chrome stable installed (every launch uses `channel: 'chrome'` with the OS sandbox on; Chrome auto-updates, Playwright's bundled Chromium does not).
 - Optional: `ANTHROPIC_API_KEY` in `.env` for live model interpretation. Without it the model path runs as labelled `offline_replay` from `fixtures/replay/*.json`.
 - Optional: `GEMINI_API_KEY` in `.env` to use the faster `gemini-3.8-flash` path (`BTS_MODEL_PROVIDER=gemini`) instead of the Anthropic default.
 
@@ -30,7 +30,7 @@ One screen, no chat. The mission sits in the centre pocket with its state, prove
 
 ```bash
 npm ci
-npx playwright install chromium
+# Google Chrome stable must be installed; no `npx playwright install` step
 cp .env.example .env        # then add ANTHROPIC_API_KEY=... if you have one
 ```
 

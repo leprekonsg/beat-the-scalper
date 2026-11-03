@@ -4,7 +4,7 @@ A three-minute presenter script for the owned storefront. Everything below is `d
 
 ## Before the audience arrives
 
-1. `npm ci && npx playwright install chromium` (first time only).
+1. `npm ci` (first time only). Google Chrome stable must be installed; launches use `channel: 'chrome'`.
 2. `.env`: `BTS_MODE=demo`. Add `ANTHROPIC_API_KEY` if you want live interpretation; otherwise the band shows "Offline replay" and the flow still completes.
 3. Optional accelerated clock so the 13:00-14:00 window is minutes away: in the terminal that runs the API set `BTS_VIRTUAL_CLOCK_START=<today>T04:58:00.000Z` (12:58 Asia/Singapore).
 4. `npm start`. Wait for the banner from the API process; copy the session token.

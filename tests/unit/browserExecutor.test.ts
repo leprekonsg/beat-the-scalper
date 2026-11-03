@@ -184,7 +184,7 @@ beforeAll(async () => {
   const a = await startFixtureServer(PAGES_A);
   serverA = a.server;
   originA = a.origin;
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: true, channel: 'chrome', chromiumSandbox: true });
 }, 60000);
 
 afterAll(async () => {
