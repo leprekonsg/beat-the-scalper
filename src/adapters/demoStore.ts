@@ -9,6 +9,7 @@
  * `data-bts-*` attributes rendered by demo/store/server.ts. Cookies are never logged.
  */
 import { chromium, type BrowserContext, type Page, type Response } from 'playwright';
+import { CHROME_LAUNCH } from '../browserLaunch.ts';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
@@ -74,7 +75,7 @@ export async function createDemoBrowser(opts: CreateDemoBrowserOptions): Promise
   mkdirSync(profileDir, { recursive: true });
   const allowedOrigin = new URL(opts.storeOrigin).origin;
 
-  const context = await chromium.launchPersistentContext(profileDir, { headless: opts.headless ?? true, channel: 'chrome', chromiumSandbox: true });
+  const context = await chromium.launchPersistentContext(profileDir, { headless: opts.headless ?? true, ...CHROME_LAUNCH });
 
   await context.route('**/*', async (route) => {
     const requestUrl = route.request().url();

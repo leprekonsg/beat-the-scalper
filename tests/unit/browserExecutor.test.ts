@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolResultBlockParam, ToolUseBlock } from '@anthropic-ai/sdk/resources/messages/messages';
 import { chromium, type Browser, type Page } from 'playwright';
+import { CHROME_LAUNCH } from '../../src/browserLaunch.ts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { FableOfferInterpreter } from '../../src/agent/assess.ts';
 import { RestrictedBrowserExecutor, type BrowserExecutorMode, type IncidentKind } from '../../src/agent/browserExecutor.ts';
@@ -184,7 +185,7 @@ beforeAll(async () => {
   const a = await startFixtureServer(PAGES_A);
   serverA = a.server;
   originA = a.origin;
-  browser = await chromium.launch({ headless: true, channel: 'chrome', chromiumSandbox: true });
+  browser = await chromium.launch({ headless: true, ...CHROME_LAUNCH });
 }, 60000);
 
 afterAll(async () => {

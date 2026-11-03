@@ -6,6 +6,7 @@
  * Output: data/feasibility/lazada-probe-<timestamp>.json (redacted observed fields) and a PNG screenshot.
  */
 import { chromium } from 'playwright';
+import { CHROME_LAUNCH } from '../src/browserLaunch.ts';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -47,8 +48,7 @@ const result: Record<string, unknown> = {
 
 const context = await chromium.launchPersistentContext(profileDir, {
   headless: true,
-  channel: 'chrome',
-  chromiumSandbox: true,
+  ...CHROME_LAUNCH,
   viewport: { width: 1280, height: 900 },
   locale: 'en-SG',
   timezoneId: 'Asia/Singapore',

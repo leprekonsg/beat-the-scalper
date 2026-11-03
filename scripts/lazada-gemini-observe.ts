@@ -13,6 +13,7 @@
  *          [--thinking low|medium|high] [--max-turns N]
  */
 import { chromium } from 'playwright';
+import { CHROME_LAUNCH } from '../src/browserLaunch.ts';
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadConfig } from '../src/config.ts';
@@ -89,8 +90,7 @@ const GOAL =
 
 const context = await chromium.launchPersistentContext(profileDir, {
   headless: true,
-  channel: 'chrome',
-  chromiumSandbox: true,
+  ...CHROME_LAUNCH,
   viewport: { width: 1280, height: 900 },
   locale: 'en-SG',
   timezoneId: 'Asia/Singapore',

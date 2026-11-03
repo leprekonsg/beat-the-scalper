@@ -10,6 +10,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { chromium } from 'playwright';
+import { CHROME_LAUNCH } from '../browserLaunch.ts';
 import { FableOfferInterpreter } from '../agent/assess.ts';
 import type { FableClient } from '../agent/client.ts';
 import { LazadaLiveObservationAdapter } from '../adapters/lazadaLive.ts';
@@ -109,14 +110,14 @@ export function liveObserveIntent(input: {
 
 /** Headless Chromium with the viewport/locale every live read so far used. `profileDir` null = fresh non-persistent context. */
 export async function launchLiveBrowser(opts: { profileDir: string | null }): Promise<{ page: LazadaLivePage; close: () => Promise<void> }> {
-  const contextOptions = { headless: true, channel: 'chrome', chromiumSandbox: true, viewport: { width: 1280, height: 900 }, locale: 'en-SG', timezoneId: 'Asia/Singapore' };
+  const persistentOptions = { headless: true, ...CHROME_LAUNCH, viewport: { width: 1280, height: 900 }, locale: 'en-SG', timezoneId: 'Asia/Singapore' };
   if (opts.profileDir) {
-    const context = await chromium.launchPersistentContext(opts.profileDir, contextOptions);
+    const context = await chromium.launchPersistentContext(opts.profileDir, persistentOptions);
     const page = context.pages()[0] ?? (await context.newPage());
     return { page, close: () => context.close() };
   }
-  const browser = await chromium.launch({ headless: true, channel: 'chrome', chromiumSandbox: true });
-  const context = await browser.newContext({ viewport: contextOptions.viewport, locale: contextOptions.locale, timezoneId: contextOptions.timezoneId });
+  const browser = await chromium.launch({ headless: true, ...CHROME_LAUNCH });
+  const context = await browser.newContext({ viewport: persistentOptions.viewport, locale: persistentOptions.locale, timezoneId: persistentOptions.timezoneId });
   const page = await context.newPage();
   return {
     page,

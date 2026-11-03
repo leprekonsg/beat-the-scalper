@@ -102,7 +102,7 @@ export default async function globalSetup(): Promise<void> {
     health: { clock: { kind: string; now: string } };
   };
   if (health.health.clock.kind !== 'virtual') throw new Error('API did not start with a virtual clock; BTS_VIRTUAL_CLOCK_START was not honoured.');
-  if (health.capabilities.demoBrowser !== 'ready') throw new Error(`Demo browser capability is "${health.capabilities.demoBrowser}"; the suite cannot observe the storefront. Install Google Chrome stable; launches use channel 'chrome'.`);
+  if (health.capabilities.demoBrowser !== 'ready') throw new Error(`Demo browser capability is "${health.capabilities.demoBrowser}"; the suite cannot observe the storefront. Install Google Chrome stable (npx playwright install chrome), or read the API's 'adapters/demoStore.ts unavailable' warning above for the launch error.`);
   if (health.modelPath !== 'offline_replay') throw new Error(`API started with modelPath="${health.modelPath}"; the e2e suite must run on the labelled offline-replay path.`);
   console.log(`[e2e] stack up: mode=${health.mode} modelProvider=${health.modelProvider} modelPath=${health.modelPath} clock=${health.health.clock.now} dataDir=${dataDir}`);
 }

@@ -30,7 +30,7 @@ One screen, no chat. The mission sits in the centre pocket with its state, prove
 
 ```bash
 npm ci
-# Google Chrome stable must be installed; no `npx playwright install` step
+npx playwright install chrome   # installs Google Chrome stable if it is missing; nothing else is needed
 cp .env.example .env        # then add ANTHROPIC_API_KEY=... if you have one
 ```
 
